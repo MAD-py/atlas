@@ -1,0 +1,24 @@
+# Design/iteration notes — not part of the public repo history
+CLAUDE.md
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Atlas database + journal files (dev/test scratch)
+*.db
+*.journal
+
+go.work
+go.work.sum
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
