@@ -1,5 +1,6 @@
 # Design/iteration notes — not part of the public repo history
 CLAUDE.md
+agent-notes/
 
 # Go build artifacts
 *.exe
