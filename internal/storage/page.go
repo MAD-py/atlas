@@ -17,6 +17,7 @@ const (
 	PageTypeInvalid PageType = 0
 	PageTypeFree    PageType = 1
 	PageTypeCatalog PageType = 2
+	PageTypeData    PageType = 3
 )
 
 // pageOffset uses uint64 so a corrupted/adversarial (pageNum, pageSize)

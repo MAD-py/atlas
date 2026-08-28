@@ -33,4 +33,13 @@ var (
 	ErrCorruptedCatalogChain   = errors.New("[Atlas] catalog page chain exceeds the file's page count")
 	ErrCollectionAlreadyExists = errors.New("[Atlas] collection already exists")
 	ErrCorruptedCollectionSlot = errors.New("[Atlas] collection slot checksum mismatch")
+
+	ErrNotADataPage       = errors.New("[Atlas] page is not a data page")
+	ErrDataPageFull       = errors.New("[Atlas] data page has no room for this record")
+	ErrCorruptedPage      = errors.New("[Atlas] page checksum mismatch")
+	ErrDocumentNotFound   = errors.New("[Atlas] document not found")
+	ErrDocumentTooLarge   = errors.New("[Atlas] document exceeds maximum size")
+	ErrCorruptedDataPage  = errors.New("[Atlas] data page header or slot bounds are invalid")
+	ErrCorruptedDocument  = errors.New("[Atlas] document checksum mismatch")
+	ErrCorruptedDataChain = errors.New("[Atlas] data page chain exceeds the file's page count")
 )
