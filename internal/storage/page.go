@@ -6,6 +6,19 @@ import (
 	"os"
 )
 
+// PageType is the leading byte every page kind shares (free-list, catalog,
+// and eventually data/journal pages) — the seed of a generic page header.
+type PageType byte
+
+const (
+	// PageTypeInvalid is the zero value, so a page freshly grown by
+	// Allocate (zero-filled, not yet given real content) can't be misread
+	// as an already-linked page of some other kind.
+	PageTypeInvalid PageType = 0
+	PageTypeFree    PageType = 1
+	PageTypeCatalog PageType = 2
+)
+
 // pageOffset uses uint64 so a corrupted/adversarial (pageNum, pageSize)
 // pair that would overflow int64 is caught explicitly instead of wrapping
 // to a bogus negative offset.

@@ -6,18 +6,6 @@ import (
 	"os"
 )
 
-// PageType is the seed of a generic page header: the leading byte every
-// page kind will share once catalog/data pages exist.
-type PageType byte
-
-const (
-	// PageTypeInvalid is the zero value, so a page freshly grown by
-	// Allocate (zero-filled, not yet given real content) can't be misread
-	// as an already-linked free-list page.
-	PageTypeInvalid PageType = 0
-	PageTypeFree    PageType = 1
-)
-
 const freePagePrefixSize = 5 // page_type (1 byte) + next_free_page (uint32)
 
 func encodeFreePage(pageSize, nextFree uint32) []byte {

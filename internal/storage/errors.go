@@ -21,4 +21,16 @@ var (
 
 	ErrNotAFreePage      = errors.New("[Atlas] page is not a free-list page")
 	ErrPageCountOverflow = errors.New("[Atlas] page count exhausted")
+
+	ErrNotACatalogPage         = errors.New("[Atlas] page is not a catalog page")
+	ErrInvalidSlotIndex        = errors.New("[Atlas] slot index out of range for this catalog page")
+	ErrCollectionNotFound      = errors.New("[Atlas] collection not found")
+	ErrCatalogPageTooSmall     = errors.New("[Atlas] page size too small to hold a single catalog slot")
+	ErrCorruptedCatalogPage    = errors.New("[Atlas] catalog page slot count exceeds page capacity")
+	ErrCollectionNameTooLong   = errors.New("[Atlas] collection name exceeds maximum length")
+	ErrInvalidCollectionName   = errors.New("[Atlas] collection name is invalid")
+	ErrCatalogNotInitialized   = errors.New("[Atlas] catalog has not been bootstrapped")
+	ErrCorruptedCatalogChain   = errors.New("[Atlas] catalog page chain exceeds the file's page count")
+	ErrCollectionAlreadyExists = errors.New("[Atlas] collection already exists")
+	ErrCorruptedCollectionSlot = errors.New("[Atlas] collection slot checksum mismatch")
 )
