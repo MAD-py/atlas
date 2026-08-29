@@ -90,8 +90,7 @@ The length is a **byte** length, not a rune/character count — differs for mult
 
 ```
 encodeValue([1, true]) -> 06 03 03 02 02
-                           │  │  └──┴──┴─ payload: encodeValue(1) ++ encodeValue(true)
-                           │  │            = [03 02] ++ [02]
+                           │  │  └──┴──┴─ payload: encodeValue(1) ++ encodeValue(true) = [03 02] ++ [02]           
                            │  └─────────── varint payload length = 3
                            └────────────── tag (array)
 ```

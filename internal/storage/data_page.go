@@ -23,9 +23,9 @@ const dataSlotSize = 9
 const dataSlotFlagTombstone byte = 1 << 0
 
 // recordIDSize mirrors internal/encoding.IDSize without importing that
-// package — this package must stay opaque to the TLV format, but the fixed
-// 12-byte id prefix is a storage-layer fact in its own right (see CLAUDE.md's
-// data-page record layout).
+// package — this package must stay opaque to the TLV format, but every
+// record's first 12 bytes are always the raw id, a storage-layer fact in
+// its own right independent of how the rest of the record is encoded.
 const recordIDSize = 12
 
 type dataSlot struct {

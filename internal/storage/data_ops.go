@@ -116,8 +116,8 @@ func linkNextDataPage(f *os.File, h *Header, pageNum, next uint32) error {
 
 // FindRecordByID walks the collection's page chain from head, comparing
 // each live record's leading recordIDSize bytes directly against id — no
-// TLV decoding, per CLAUDE.md's "a linear scan compares _id directly
-// without decoding the document." A slot whose offset/length can't be
+// TLV decoding needed, since a record's id always lives at a fixed offset
+// regardless of its encoded fields. A slot whose offset/length can't be
 // trusted (readDataPage already bounds-checked the page itself, but a
 // single slot's own fields could still be corrupted) is skipped rather than
 // aborting the scan, since it might not even be the record being searched
@@ -235,8 +235,9 @@ func DeleteRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 }
 
 // freeEmptyDataPage unlinks pageNum (whose last live record was just
-// tombstoned) from the collection's chain and returns it to the free-list —
-// eager reclaim, per CLAUDE.md's free-list section. prevPage == 0 means
+// tombstoned) from the collection's chain and returns it to the free-list
+// immediately, rather than deferring reclaim to some later pass.
+// prevPage == 0 means
 // pageNum was the chain's head. The Head/Tail/PageCount fields on slot are
 // updated in memory here; the caller persists them via WriteCollectionSlot.
 func freeEmptyDataPage(f *os.File, h *Header, prevPage, pageNum, nextPage uint32, slot *CollectionSlot) error {
