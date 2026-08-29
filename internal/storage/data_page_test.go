@@ -198,10 +198,10 @@ func (s *DataPageSuite) TestCompactDataPage_RelocatesLiveRecordsAndPreservesChec
 // interprets), followed by extraLen filler bytes.
 func makeRecord(idByte byte, extraLen int) []byte {
 	rec := make([]byte, recordIDSize+extraLen)
-	for i := 0; i < recordIDSize; i++ {
+	for i := range recordIDSize {
 		rec[i] = idByte
 	}
-	for i := 0; i < extraLen; i++ {
+	for i := range extraLen {
 		rec[recordIDSize+i] = byte(i)
 	}
 	return rec

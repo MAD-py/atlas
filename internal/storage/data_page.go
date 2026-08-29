@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"hash/crc32"
 	"os"
@@ -122,7 +123,7 @@ func computeDataPageChecksum(buf []byte, pageSize uint32) (uint32, error) {
 	hasher.Write(buf[0:9])
 	hasher.Write(buf[slotArrayStart:pageSize])
 
-	for i := uint32(0); i < uint32(slotCount); i++ {
+	for i := range uint32(slotCount) {
 		off, ok := dataSlotOffset(pageSize, i)
 		if !ok {
 			return 0, ErrCorruptedDataPage
@@ -212,7 +213,7 @@ func (v *dataPageView) recordBytes(slot dataSlot) ([]byte, error) {
 
 func (v *dataPageView) liveBytes() (uint32, error) {
 	var total uint32
-	for i := uint32(0); i < uint32(v.slotCount); i++ {
+	for i := range uint32(v.slotCount) {
 		slot, err := v.slotAt(i)
 		if err != nil {
 			return 0, err
@@ -226,7 +227,7 @@ func (v *dataPageView) liveBytes() (uint32, error) {
 
 func (v *dataPageView) liveSlotCount() (uint32, error) {
 	var n uint32
-	for i := uint32(0); i < uint32(v.slotCount); i++ {
+	for i := range uint32(v.slotCount) {
 		slot, err := v.slotAt(i)
 		if err != nil {
 			return 0, err
@@ -288,8 +289,8 @@ func newBlankDataPage(pageSize uint32) (*dataPageView, error) {
 // the per-slot checksum exists to avoid (see agent-notes for the full
 // reasoning). Callers that need the aggregate guarantee call
 // verifyDataPageChecksum explicitly.
-func readDataPage(f *os.File, h *Header, pageNum uint32) (*dataPageView, error) {
-	buf, err := ReadPage(f, h.PageSize, pageNum)
+func readDataPage(ctx context.Context, f *os.File, h *Header, pageNum uint32) (*dataPageView, error) {
+	buf, err := ReadPage(ctx, f, h.PageSize, pageNum)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +368,7 @@ func compactDataPage(view *dataPageView) error {
 	newBuf := make([]byte, view.pageSize)
 	writeOffset := uint32(dataPageHeaderSize)
 
-	for i := uint32(0); i < uint32(view.slotCount); i++ {
+	for i := range uint32(view.slotCount) {
 		off, ok := dataSlotOffset(view.pageSize, i)
 		if !ok {
 			return ErrCorruptedDataPage

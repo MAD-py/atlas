@@ -41,7 +41,7 @@ func (s *DocumentSuite) TestNewAtlasID_CounterIncrementsMonotonically() {
 func (s *DocumentSuite) TestNewAtlasID_UniqueAcrossManyCalls() {
 	const n = 1000
 	seen := make(map[AtlasID]bool, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		id, err := NewAtlasID()
 		s.Require().NoError(err)
 		s.False(seen[id], "duplicate AtlasID generated")

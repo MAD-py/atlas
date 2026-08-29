@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"os"
 )
@@ -67,8 +68,8 @@ type catalogPageView struct {
 // this, a corrupted on-disk occupied count could drive slot-index arithmetic
 // past the end of buf (same overflow-bypasses-bounds-check shape flagged in
 // internal/encoding's post-review; see agent-notes).
-func readCatalogPage(f *os.File, h *Header, pageNum uint32) (*catalogPageView, error) {
-	buf, err := ReadPage(f, h.PageSize, pageNum)
+func readCatalogPage(ctx context.Context, f *os.File, h *Header, pageNum uint32) (*catalogPageView, error) {
+	buf, err := ReadPage(ctx, f, h.PageSize, pageNum)
 	if err != nil {
 		return nil, err
 	}
@@ -98,16 +99,24 @@ func (v *catalogPageView) slotBytes(i uint32) []byte {
 	return v.buf[off : off+collectionSlotSize]
 }
 
-func writeBlankCatalogPage(f *os.File, h *Header, pageNum uint32) error {
+func writeBlankCatalogPage(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, pageNum uint32) error {
 	buf := make([]byte, h.PageSize)
 	encodeCatalogPageHeader(buf, 0, 0)
-	return WritePage(f, h.PageSize, pageNum, buf)
+	return WritePage(ctx, f, h, cycle, pageNum, buf)
 }
 
 // Bootstrap formats a brand-new .db file: header, then the anchor catalog
 // page (page 1 on a fresh file, via the existing Allocate), CatalogHead
-// pointed at it. No file lock, no rollback journal — both future work.
-func Bootstrap(f *os.File, pageSize uint32) (*Header, error) {
+// pointed at it. No file lock — future work.
+//
+// Unlike every other mutating function in this package, Bootstrap does not
+// take a *JournalCycle parameter: it's the one operation for which no
+// *Header yet exists for a caller to construct a cycle from, since
+// Bootstrap is what creates that header. It opens and commits its own cycle
+// internally instead — a brand-new file has no prior state to protect, but
+// there's no separate "unprotected write" path left in this package, so it
+// still funnels through the same mechanism.
+func Bootstrap(ctx context.Context, f *os.File, pageSize uint32) (*Header, error) {
 	h, err := NewHeader(pageSize)
 	if err != nil {
 		return nil, err
@@ -115,20 +124,34 @@ func Bootstrap(f *os.File, pageSize uint32) (*Header, error) {
 	if _, err := catalogCapacity(h.PageSize); err != nil {
 		return nil, err
 	}
-	if err := WriteHeader(f, h); err != nil {
-		return nil, err
-	}
 
-	anchor, err := Allocate(f, h)
+	cycle, err := NewJournalCycle(ctx, f, h)
 	if err != nil {
 		return nil, err
 	}
-	if err := writeBlankCatalogPage(f, h, anchor); err != nil {
+
+	if err := WriteHeader(ctx, f, h, cycle); err != nil {
+		_ = cycle.Abort(ctx, f, h)
+		return nil, err
+	}
+
+	anchor, err := Allocate(ctx, f, h, cycle)
+	if err != nil {
+		_ = cycle.Abort(ctx, f, h)
+		return nil, err
+	}
+	if err := writeBlankCatalogPage(ctx, f, h, cycle, anchor); err != nil {
+		_ = cycle.Abort(ctx, f, h)
 		return nil, err
 	}
 
 	h.CatalogHead = anchor
-	if err := WriteHeader(f, h); err != nil {
+	if err := WriteHeader(ctx, f, h, cycle); err != nil {
+		_ = cycle.Abort(ctx, f, h)
+		return nil, err
+	}
+
+	if err := cycle.Commit(ctx, f, h); err != nil {
 		return nil, err
 	}
 	return h, nil

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -32,8 +33,8 @@ func maxCatalogChainLength(h *Header) uint32 {
 // WriteCollectionSlot overwrites the slot at ref in place, recomputing its
 // checksum. Does not touch the page's header (next/occupied) — callers that
 // need those updated (create, tombstone) handle that separately.
-func WriteCollectionSlot(f *os.File, h *Header, ref SlotRef, slot CollectionSlot) error {
-	view, err := readCatalogPage(f, h, ref.Page)
+func WriteCollectionSlot(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, ref SlotRef, slot CollectionSlot) error {
+	view, err := readCatalogPage(ctx, f, h, ref.Page)
 	if err != nil {
 		return err
 	}
@@ -45,7 +46,7 @@ func WriteCollectionSlot(f *os.File, h *Header, ref SlotRef, slot CollectionSlot
 		return err
 	}
 	copy(view.slotBytes(ref.Index), encoded)
-	return WritePage(f, h.PageSize, ref.Page, view.buf)
+	return WritePage(ctx, f, h, cycle, ref.Page, view.buf)
 }
 
 // FindCollectionSlot scans the whole catalog page chain for a live
@@ -57,7 +58,7 @@ func WriteCollectionSlot(f *os.File, h *Header, ref SlotRef, slot CollectionSlot
 // result is reported as corruption rather than ErrCollectionNotFound: the
 // corrupted slot's real name is unknown, so "not found" would be a claim
 // this code can't actually stand behind.
-func FindCollectionSlot(f *os.File, h *Header, name string) (SlotRef, CollectionSlot, error) {
+func FindCollectionSlot(ctx context.Context, f *os.File, h *Header, name string) (SlotRef, CollectionSlot, error) {
 	if err := validateCollectionName(name); err != nil {
 		return SlotRef{}, CollectionSlot{}, err
 	}
@@ -71,11 +72,11 @@ func FindCollectionSlot(f *os.File, h *Header, name string) (SlotRef, Collection
 		if visited >= maxCatalogChainLength(h) {
 			return SlotRef{}, CollectionSlot{}, ErrCorruptedCatalogChain
 		}
-		view, err := readCatalogPage(f, h, pageNum)
+		view, err := readCatalogPage(ctx, f, h, pageNum)
 		if err != nil {
 			return SlotRef{}, CollectionSlot{}, err
 		}
-		for i := uint32(0); i < uint32(view.occupied); i++ {
+		for i := range uint32(view.occupied) {
 			slot, decErr := DecodeCollectionSlot(view.slotBytes(i))
 			if decErr != nil {
 				corrupted = fmt.Errorf("%w: page %d slot %d", decErr, pageNum, i)
@@ -98,7 +99,7 @@ func FindCollectionSlot(f *os.File, h *Header, name string) (SlotRef, Collection
 // but does not stop the rest of the scan; every corruption encountered is
 // joined into the returned error alongside whatever entries were still
 // readable.
-func ListCollectionSlots(f *os.File, h *Header) ([]CollectionEntry, error) {
+func ListCollectionSlots(ctx context.Context, f *os.File, h *Header) ([]CollectionEntry, error) {
 	if h.CatalogHead == 0 {
 		return nil, ErrCatalogNotInitialized
 	}
@@ -110,11 +111,11 @@ func ListCollectionSlots(f *os.File, h *Header) ([]CollectionEntry, error) {
 		if visited >= maxCatalogChainLength(h) {
 			return entries, ErrCorruptedCatalogChain
 		}
-		view, err := readCatalogPage(f, h, pageNum)
+		view, err := readCatalogPage(ctx, f, h, pageNum)
 		if err != nil {
 			return entries, err
 		}
-		for i := uint32(0); i < uint32(view.occupied); i++ {
+		for i := range uint32(view.occupied) {
 			slot, decErr := DecodeCollectionSlot(view.slotBytes(i))
 			if decErr != nil {
 				errs = append(errs, fmt.Errorf("%w: page %d slot %d", decErr, pageNum, i))
@@ -137,7 +138,7 @@ func ListCollectionSlots(f *os.File, h *Header) ([]CollectionEntry, error) {
 // live slots, then places the new slot: reuse a tombstoned slot anywhere in
 // the chain if one was seen, else append to the last page if it has room,
 // else grow the chain with a new page.
-func CreateCollectionSlot(f *os.File, h *Header, name string, internal bool) (SlotRef, error) {
+func CreateCollectionSlot(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, name string, internal bool) (SlotRef, error) {
 	if err := validateCollectionName(name); err != nil {
 		return SlotRef{}, err
 	}
@@ -153,11 +154,11 @@ func CreateCollectionSlot(f *os.File, h *Header, name string, internal bool) (Sl
 		if visited >= maxCatalogChainLength(h) {
 			return SlotRef{}, ErrCorruptedCatalogChain
 		}
-		view, err := readCatalogPage(f, h, pageNum)
+		view, err := readCatalogPage(ctx, f, h, pageNum)
 		if err != nil {
 			return SlotRef{}, err
 		}
-		for i := uint32(0); i < uint32(view.occupied); i++ {
+		for i := range uint32(view.occupied) {
 			slot, decErr := DecodeCollectionSlot(view.slotBytes(i))
 			if decErr != nil {
 				return SlotRef{}, fmt.Errorf("%w: page %d slot %d", decErr, pageNum, i)
@@ -186,27 +187,27 @@ func CreateCollectionSlot(f *os.File, h *Header, name string, internal bool) (Sl
 	}
 
 	if reuse != nil {
-		return *reuse, writeSlotBytes(f, h, *reuse, encoded)
+		return *reuse, writeSlotBytes(ctx, f, h, cycle, *reuse, encoded)
 	}
 
 	if uint32(lastView.occupied) < lastView.capacity {
 		idx := uint32(lastView.occupied)
 		copy(lastView.slotBytes(idx), encoded)
 		encodeCatalogPageHeader(lastView.buf, lastView.next, uint16(idx+1))
-		if err := WritePage(f, h.PageSize, lastPage, lastView.buf); err != nil {
+		if err := WritePage(ctx, f, h, cycle, lastPage, lastView.buf); err != nil {
 			return SlotRef{}, err
 		}
 		return SlotRef{Page: lastPage, Index: idx}, nil
 	}
 
-	newPageNum, err := Allocate(f, h)
+	newPageNum, err := Allocate(ctx, f, h, cycle)
 	if err != nil {
 		return SlotRef{}, err
 	}
 	newBuf := make([]byte, h.PageSize)
 	encodeCatalogPageHeader(newBuf, 0, 1)
 	copy(newBuf[catalogPageHeaderSize:catalogPageHeaderSize+collectionSlotSize], encoded)
-	if err := WritePage(f, h.PageSize, newPageNum, newBuf); err != nil {
+	if err := WritePage(ctx, f, h, cycle, newPageNum, newBuf); err != nil {
 		return SlotRef{}, err
 	}
 
@@ -216,20 +217,20 @@ func CreateCollectionSlot(f *os.File, h *Header, name string, internal bool) (Sl
 	// same reasoning as the rest of this package deferring true atomicity
 	// to the future rollback journal.
 	encodeCatalogPageHeader(lastView.buf, newPageNum, lastView.occupied)
-	if err := WritePage(f, h.PageSize, lastPage, lastView.buf); err != nil {
+	if err := WritePage(ctx, f, h, cycle, lastPage, lastView.buf); err != nil {
 		return SlotRef{}, err
 	}
 
 	return SlotRef{Page: newPageNum, Index: 0}, nil
 }
 
-func writeSlotBytes(f *os.File, h *Header, ref SlotRef, encoded []byte) error {
-	view, err := readCatalogPage(f, h, ref.Page)
+func writeSlotBytes(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, ref SlotRef, encoded []byte) error {
+	view, err := readCatalogPage(ctx, f, h, ref.Page)
 	if err != nil {
 		return err
 	}
 	copy(view.slotBytes(ref.Index), encoded)
-	return WritePage(f, h.PageSize, ref.Page, view.buf)
+	return WritePage(ctx, f, h, cycle, ref.Page, view.buf)
 }
 
 // RemoveCollectionSlot tombstones the named collection's catalog slot.
@@ -240,13 +241,13 @@ func writeSlotBytes(f *os.File, h *Header, ref SlotRef, encoded []byte) error {
 // touched here — data pages don't exist as a module yet), and only then
 // call this to reclaim the catalog slot. Calling this alone leaks the
 // collection's data pages.
-func RemoveCollectionSlot(f *os.File, h *Header, name string) error {
-	ref, slot, err := FindCollectionSlot(f, h, name)
+func RemoveCollectionSlot(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, name string) error {
+	ref, slot, err := FindCollectionSlot(ctx, f, h, name)
 	if err != nil {
 		return err
 	}
 
-	view, err := readCatalogPage(f, h, ref.Page)
+	view, err := readCatalogPage(ctx, f, h, ref.Page)
 	if err != nil {
 		return err
 	}
@@ -258,7 +259,7 @@ func RemoveCollectionSlot(f *os.File, h *Header, name string) error {
 	copy(view.slotBytes(ref.Index), encoded)
 
 	allTombstoned := true
-	for i := uint32(0); i < uint32(view.occupied); i++ {
+	for i := range uint32(view.occupied) {
 		s, decErr := DecodeCollectionSlot(view.slotBytes(i))
 		if decErr != nil {
 			// Can't prove this one is tombstoned too — conservatively
@@ -273,12 +274,12 @@ func RemoveCollectionSlot(f *os.File, h *Header, name string) error {
 		}
 	}
 
-	if err := WritePage(f, h.PageSize, ref.Page, view.buf); err != nil {
+	if err := WritePage(ctx, f, h, cycle, ref.Page, view.buf); err != nil {
 		return err
 	}
 
 	if allTombstoned && ref.Page != h.CatalogHead {
-		return unlinkAndFreeCatalogPage(f, h, ref.Page)
+		return unlinkAndFreeCatalogPage(ctx, f, h, cycle, ref.Page)
 	}
 	return nil
 }
@@ -288,28 +289,28 @@ func RemoveCollectionSlot(f *os.File, h *Header, name string) error {
 // pageNum is not the anchor page (h.CatalogHead) — the anchor is never
 // freed even when empty, so the bootstrap invariant "header always points
 // to a valid catalog page" never needs a special case.
-func unlinkAndFreeCatalogPage(f *os.File, h *Header, pageNum uint32) error {
+func unlinkAndFreeCatalogPage(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, pageNum uint32) error {
 	predPageNum := h.CatalogHead
 	for visited := uint32(0); predPageNum != 0; visited++ {
 		if visited >= maxCatalogChainLength(h) {
 			return ErrCorruptedCatalogChain
 		}
-		predView, err := readCatalogPage(f, h, predPageNum)
+		predView, err := readCatalogPage(ctx, f, h, predPageNum)
 		if err != nil {
 			return err
 		}
 		if predView.next == pageNum {
-			target, err := readCatalogPage(f, h, pageNum)
+			target, err := readCatalogPage(ctx, f, h, pageNum)
 			if err != nil {
 				return err
 			}
 			// Unlink before freeing: a page must never be simultaneously
 			// reachable via the catalog chain and the free-list.
 			encodeCatalogPageHeader(predView.buf, target.next, predView.occupied)
-			if err := WritePage(f, h.PageSize, predPageNum, predView.buf); err != nil {
+			if err := WritePage(ctx, f, h, cycle, predPageNum, predView.buf); err != nil {
 				return err
 			}
-			return Free(f, h, pageNum)
+			return Free(ctx, f, h, cycle, pageNum)
 		}
 		predPageNum = predView.next
 	}

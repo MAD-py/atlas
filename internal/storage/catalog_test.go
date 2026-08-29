@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,10 +11,14 @@ import (
 
 type CatalogSuite struct {
 	suite.Suite
-	f *os.File
+	f    *os.File
+	cyc  *JournalCycle
+	cycH *Header
 }
 
 func (s *CatalogSuite) SetupTest() {
+	s.cyc, s.cycH = nil, nil // the suite instance is reused across tests; a prior test's committed cycle must not leak in
+
 	path := filepath.Join(s.T().TempDir(), "test.db")
 	f, err := os.Create(path)
 	s.Require().NoError(err)
@@ -21,7 +26,22 @@ func (s *CatalogSuite) SetupTest() {
 }
 
 func (s *CatalogSuite) TearDownTest() {
+	if s.cyc != nil {
+		_ = s.cyc.Commit(context.Background(), s.f, s.cycH)
+	}
 	s.Require().NoError(s.f.Close())
+}
+
+// cycle returns this test's single JournalCycle, opened against h on first
+// call and reused after — one cycle per test, committed automatically
+// (best-effort) in TearDownTest.
+func (s *CatalogSuite) cycle(h *Header) *JournalCycle {
+	if s.cyc == nil {
+		c, err := NewJournalCycle(context.Background(), s.f, h)
+		s.Require().NoError(err)
+		s.cyc, s.cycH = c, h
+	}
+	return s.cyc
 }
 
 func TestCatalog(t *testing.T) {
@@ -77,19 +97,20 @@ func (s *CatalogSuite) TestCatalogCapacity_RejectsPageTooSmallForOneSlot() {
 }
 
 func (s *CatalogSuite) TestReadCatalogPage_DetectsOccupiedCountExceedingCapacity() {
+	ctx := context.Background()
 	pageSize := uint32(200) // capacity 2
 	h, err := NewHeader(pageSize)
 	s.Require().NoError(err)
-	s.Require().NoError(WriteHeader(s.f, h))
+	s.Require().NoError(WriteHeader(ctx, s.f, h, s.cycle(h)))
 
 	// Craft a catalog page whose occupied count (corrupted) exceeds what
 	// this page size can actually hold, and verify it's rejected cleanly
 	// instead of letting later slot-index arithmetic run past the buffer.
 	buf := make([]byte, pageSize)
 	encodeCatalogPageHeader(buf, 0, 3) // capacity is 2, claim 3
-	s.Require().NoError(WritePage(s.f, pageSize, 1, buf))
+	s.Require().NoError(WritePage(ctx, s.f, h, s.cycle(h), 1, buf))
 
-	_, err = readCatalogPage(s.f, h, 1)
+	_, err = readCatalogPage(ctx, s.f, h, 1)
 	s.ErrorIs(err, ErrCorruptedCatalogPage)
 }
 
@@ -97,54 +118,58 @@ func (s *CatalogSuite) TestReadCatalogPage_MaxUint16OccupiedDoesNotPanic() {
 	// Adversarial: occupied count corrupted to the max representable
 	// uint16, on a page far too small to hold that many slots. Must error,
 	// never panic on out-of-bounds slot arithmetic.
+	ctx := context.Background()
 	pageSize := uint32(200)
 	h, err := NewHeader(pageSize)
 	s.Require().NoError(err)
-	s.Require().NoError(WriteHeader(s.f, h))
+	s.Require().NoError(WriteHeader(ctx, s.f, h, s.cycle(h)))
 
 	buf := make([]byte, pageSize)
 	encodeCatalogPageHeader(buf, 0, 65535)
-	s.Require().NoError(WritePage(s.f, pageSize, 1, buf))
+	s.Require().NoError(WritePage(ctx, s.f, h, s.cycle(h), 1, buf))
 
 	s.NotPanics(func() {
-		_, err := readCatalogPage(s.f, h, 1)
+		_, err := readCatalogPage(ctx, s.f, h, 1)
 		s.ErrorIs(err, ErrCorruptedCatalogPage)
 	})
 }
 
 func (s *CatalogSuite) TestBootstrap_ProducesValidEmptyCatalogAnchor() {
-	h, err := Bootstrap(s.f, 200)
+	ctx := context.Background()
+	h, err := Bootstrap(ctx, s.f, 200)
 	s.Require().NoError(err)
 	s.Equal(uint32(1), h.CatalogHead) // anchor is page 1 on a fresh file
 	s.Equal(uint32(1), h.PageCount)
 
-	view, err := readCatalogPage(s.f, h, h.CatalogHead)
+	view, err := readCatalogPage(ctx, s.f, h, h.CatalogHead)
 	s.Require().NoError(err)
 	s.Equal(uint32(0), view.next)
 	s.Equal(uint16(0), view.occupied)
 
-	entries, err := ListCollectionSlots(s.f, h)
+	entries, err := ListCollectionSlots(ctx, s.f, h)
 	s.Require().NoError(err)
 	s.Empty(entries)
 }
 
 func (s *CatalogSuite) TestBootstrap_HeaderPersistedToDisk() {
-	h, err := Bootstrap(s.f, 200)
+	ctx := context.Background()
+	h, err := Bootstrap(ctx, s.f, 200)
 	s.Require().NoError(err)
 
-	reread, err := ReadHeader(s.f)
+	reread, err := ReadHeader(ctx, s.f)
 	s.Require().NoError(err)
 	s.Equal(h.CatalogHead, reread.CatalogHead)
 	s.Equal(h.PageCount, reread.PageCount)
+	s.False(reread.Dirty) // Bootstrap commits its own cycle before returning
 }
 
 func (s *CatalogSuite) TestBootstrap_RejectsPageSizeTooSmallForCatalog() {
-	_, err := Bootstrap(s.f, MinPageSize)
+	_, err := Bootstrap(context.Background(), s.f, MinPageSize)
 	s.ErrorIs(err, ErrCatalogPageTooSmall)
 }
 
 func (s *CatalogSuite) TestBootstrap_DefaultPageSize() {
-	h, err := Bootstrap(s.f, 0)
+	h, err := Bootstrap(context.Background(), s.f, 0)
 	s.Require().NoError(err)
 	s.Equal(DefaultPageSize, h.PageSize)
 	s.Equal(uint32(1), h.CatalogHead)

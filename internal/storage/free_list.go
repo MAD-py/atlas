@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"os"
@@ -28,10 +29,10 @@ func decodeFreePageNext(buf []byte) (uint32, error) {
 // Allocate returns the free-list head if non-empty, or a newly grown page
 // otherwise. h is only mutated after the header write to disk succeeds, so
 // a failed Allocate never leaves h ahead of what's on disk.
-func Allocate(f *os.File, h *Header) (uint32, error) {
+func Allocate(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle) (uint32, error) {
 	if h.FreeListHead != 0 {
 		pageNum := h.FreeListHead
-		buf, err := ReadPage(f, h.PageSize, pageNum)
+		buf, err := ReadPage(ctx, f, h.PageSize, pageNum)
 		if err != nil {
 			return 0, err
 		}
@@ -41,7 +42,7 @@ func Allocate(f *os.File, h *Header) (uint32, error) {
 		}
 		updated := *h
 		updated.FreeListHead = next
-		if err := WriteHeader(f, &updated); err != nil {
+		if err := WriteHeader(ctx, f, &updated, cycle); err != nil {
 			return 0, err
 		}
 		*h = updated
@@ -53,12 +54,12 @@ func Allocate(f *os.File, h *Header) (uint32, error) {
 	}
 	pageNum := h.PageCount + 1
 	blank := make([]byte, h.PageSize)
-	if err := WritePage(f, h.PageSize, pageNum, blank); err != nil {
+	if err := WritePage(ctx, f, h, cycle, pageNum, blank); err != nil {
 		return 0, err
 	}
 	updated := *h
 	updated.PageCount = pageNum
-	if err := WriteHeader(f, &updated); err != nil {
+	if err := WriteHeader(ctx, f, &updated, cycle); err != nil {
 		return 0, err
 	}
 	*h = updated
@@ -66,17 +67,17 @@ func Allocate(f *os.File, h *Header) (uint32, error) {
 }
 
 // Free pushes pageNum onto the free-list head.
-func Free(f *os.File, h *Header, pageNum uint32) error {
+func Free(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, pageNum uint32) error {
 	if pageNum == 0 || pageNum > h.PageCount {
 		return ErrInvalidPageNumber
 	}
 	buf := encodeFreePage(h.PageSize, h.FreeListHead)
-	if err := WritePage(f, h.PageSize, pageNum, buf); err != nil {
+	if err := WritePage(ctx, f, h, cycle, pageNum, buf); err != nil {
 		return err
 	}
 	updated := *h
 	updated.FreeListHead = pageNum
-	if err := WriteHeader(f, &updated); err != nil {
+	if err := WriteHeader(ctx, f, &updated, cycle); err != nil {
 		return err
 	}
 	*h = updated

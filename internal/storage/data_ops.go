@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -22,7 +23,7 @@ func maxDataChainLength(h *Header) uint32 {
 // newly allocated page linked in as the new tail otherwise. slot is mutated
 // in place (Head/Tail/PageCount/DocCount) and persisted via
 // WriteCollectionSlot before returning.
-func InsertRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlot, record []byte) (pageNum, slotIndex uint32, err error) {
+func InsertRecord(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, catalogRef SlotRef, slot *CollectionSlot, record []byte) (pageNum, slotIndex uint32, err error) {
 	maxSize := dataPageMaxRecordSize(h.PageSize)
 	if uint32(len(record)) > maxSize {
 		return 0, 0, fmt.Errorf("%w: %d bytes, blank-page limit is %d bytes", ErrDocumentTooLarge, len(record), maxSize)
@@ -34,7 +35,7 @@ func InsertRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 	var target uint32
 
 	if oldTail != 0 {
-		view, err = readDataPage(f, h, oldTail)
+		view, err = readDataPage(ctx, f, h, oldTail)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -57,7 +58,7 @@ func InsertRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 
 	allocatedNew := view == nil
 	if allocatedNew {
-		newPageNum, aerr := Allocate(f, h)
+		newPageNum, aerr := Allocate(ctx, f, h, cycle)
 		if aerr != nil {
 			return 0, 0, aerr
 		}
@@ -72,7 +73,7 @@ func InsertRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 	if werr != nil {
 		return 0, 0, werr
 	}
-	if err = WritePage(f, h.PageSize, target, view.buf); err != nil {
+	if err = WritePage(ctx, f, h, cycle, target, view.buf); err != nil {
 		return 0, 0, err
 	}
 
@@ -82,7 +83,7 @@ func InsertRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 	// orphaned-but-harmless page, never a dangling pointer a reader could
 	// follow into a still-blank page.
 	if allocatedNew && oldTail != 0 {
-		if err = linkNextDataPage(f, h, oldTail, target); err != nil {
+		if err = linkNextDataPage(ctx, f, h, cycle, oldTail, target); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -95,15 +96,15 @@ func InsertRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 		slot.PageCount++
 	}
 	slot.DocCount++
-	if err = WriteCollectionSlot(f, h, catalogRef, *slot); err != nil {
+	if err = WriteCollectionSlot(ctx, f, h, cycle, catalogRef, *slot); err != nil {
 		return 0, 0, err
 	}
 
 	return target, idx, nil
 }
 
-func linkNextDataPage(f *os.File, h *Header, pageNum, next uint32) error {
-	view, err := readDataPage(f, h, pageNum)
+func linkNextDataPage(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, pageNum, next uint32) error {
+	view, err := readDataPage(ctx, f, h, pageNum)
 	if err != nil {
 		return err
 	}
@@ -111,7 +112,7 @@ func linkNextDataPage(f *os.File, h *Header, pageNum, next uint32) error {
 	if err := view.finalize(); err != nil {
 		return err
 	}
-	return WritePage(f, h.PageSize, pageNum, view.buf)
+	return WritePage(ctx, f, h, cycle, pageNum, view.buf)
 }
 
 // FindRecordByID walks the collection's page chain from head, comparing
@@ -124,18 +125,18 @@ func linkNextDataPage(f *os.File, h *Header, pageNum, next uint32) error {
 // for. Once an id match is found, its own per-record checksum is verified
 // before the bytes are handed back — a corrupted OTHER record earlier in
 // the same page never blocks reaching this one.
-func FindRecordByID(f *os.File, h *Header, head uint32, id [recordIDSize]byte) (record []byte, pageNum, slotIndex uint32, err error) {
+func FindRecordByID(ctx context.Context, f *os.File, h *Header, head uint32, id [recordIDSize]byte) (record []byte, pageNum, slotIndex uint32, err error) {
 	pageNum = head
 	for visited := uint32(0); pageNum != 0; visited++ {
 		if visited >= maxDataChainLength(h) {
 			return nil, 0, 0, ErrCorruptedDataChain
 		}
-		view, verr := readDataPage(f, h, pageNum)
+		view, verr := readDataPage(ctx, f, h, pageNum)
 		if verr != nil {
 			return nil, 0, 0, verr
 		}
 
-		for i := uint32(0); i < uint32(view.slotCount); i++ {
+		for i := range uint32(view.slotCount) {
 			slot, serr := view.slotAt(i)
 			if serr != nil {
 				return nil, 0, 0, serr
@@ -165,7 +166,7 @@ func FindRecordByID(f *os.File, h *Header, head uint32, id [recordIDSize]byte) (
 // already in hand — no re-walk from head the way
 // unlinkAndFreeCatalogPage (catalog_ops.go) needs to, since that function
 // isn't handed a predecessor by its caller and this one is.
-func DeleteRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlot, id [recordIDSize]byte) error {
+func DeleteRecord(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, catalogRef SlotRef, slot *CollectionSlot, id [recordIDSize]byte) error {
 	if slot.Head == 0 {
 		return ErrDocumentNotFound
 	}
@@ -176,13 +177,13 @@ func DeleteRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 		if visited >= maxDataChainLength(h) {
 			return ErrCorruptedDataChain
 		}
-		view, err := readDataPage(f, h, pageNum)
+		view, err := readDataPage(ctx, f, h, pageNum)
 		if err != nil {
 			return err
 		}
 
 		found := false
-		for i := uint32(0); i < uint32(view.slotCount); i++ {
+		for i := range uint32(view.slotCount) {
 			off, ok := dataSlotOffset(h.PageSize, i)
 			if !ok {
 				return ErrCorruptedDataPage
@@ -213,7 +214,7 @@ func DeleteRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 		if err := view.finalize(); err != nil {
 			return err
 		}
-		if err := WritePage(f, h.PageSize, pageNum, view.buf); err != nil {
+		if err := WritePage(ctx, f, h, cycle, pageNum, view.buf); err != nil {
 			return err
 		}
 		slot.DocCount--
@@ -223,12 +224,12 @@ func DeleteRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 			return lerr
 		}
 		if remaining == 0 {
-			if err := freeEmptyDataPage(f, h, prevPage, pageNum, view.next, slot); err != nil {
+			if err := freeEmptyDataPage(ctx, f, h, cycle, prevPage, pageNum, view.next, slot); err != nil {
 				return err
 			}
 		}
 
-		return WriteCollectionSlot(f, h, catalogRef, *slot)
+		return WriteCollectionSlot(ctx, f, h, cycle, catalogRef, *slot)
 	}
 
 	return ErrDocumentNotFound
@@ -240,11 +241,11 @@ func DeleteRecord(f *os.File, h *Header, catalogRef SlotRef, slot *CollectionSlo
 // prevPage == 0 means
 // pageNum was the chain's head. The Head/Tail/PageCount fields on slot are
 // updated in memory here; the caller persists them via WriteCollectionSlot.
-func freeEmptyDataPage(f *os.File, h *Header, prevPage, pageNum, nextPage uint32, slot *CollectionSlot) error {
+func freeEmptyDataPage(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, prevPage, pageNum, nextPage uint32, slot *CollectionSlot) error {
 	if prevPage == 0 {
 		slot.Head = nextPage
 	} else {
-		prevView, err := readDataPage(f, h, prevPage)
+		prevView, err := readDataPage(ctx, f, h, prevPage)
 		if err != nil {
 			return err
 		}
@@ -254,7 +255,7 @@ func freeEmptyDataPage(f *os.File, h *Header, prevPage, pageNum, nextPage uint32
 		}
 		// Unlink before freeing: pageNum must never be simultaneously
 		// reachable via the collection's chain and the free-list.
-		if err := WritePage(f, h.PageSize, prevPage, prevView.buf); err != nil {
+		if err := WritePage(ctx, f, h, cycle, prevPage, prevView.buf); err != nil {
 			return err
 		}
 	}
@@ -271,5 +272,5 @@ func freeEmptyDataPage(f *os.File, h *Header, prevPage, pageNum, nextPage uint32
 		slot.PageCount--
 	}
 
-	return Free(f, h, pageNum)
+	return Free(ctx, f, h, cycle, pageNum)
 }
