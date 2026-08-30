@@ -218,6 +218,132 @@ func (s *DataOpsSuite) TestFind_DetectsCorruptedRecordAfterIDMatch() {
 	s.ErrorIs(err, ErrCorruptedDocument)
 }
 
+// --- NextPage ---
+
+func (s *DataOpsSuite) TestNextPage_SinglePageReturnsAllRecordsInSlotOrder() {
+	ctx := context.Background()
+	ref, slot := s.newCollection("single-page")
+	s.insertN(ref, &slot, 1, 3)
+
+	records, next, err := NextPage(ctx, s.f, s.h, slot.Head)
+	s.Require().NoError(err)
+	s.Equal(uint32(0), next)
+	s.Require().Len(records, 3)
+	for i, want := range []byte{1, 2, 3} {
+		s.Equal(want, records[i].Data[0])
+		s.Equal(slot.Head, records[i].PageNum)
+		s.Equal(uint32(i), records[i].SlotIndex)
+	}
+}
+
+func (s *DataOpsSuite) TestNextPage_WalksMultiPageChainAcrossCalls() {
+	ctx := context.Background()
+	ref, slot := s.newCollection("multi-page")
+	s.insertN(ref, &slot, 1, 9) // 3 pages of 3 records each
+	s.Require().Equal(uint32(3), slot.PageCount)
+
+	var got []byte
+	startPage := slot.Head
+	pages := 0
+	for startPage != 0 {
+		records, next, err := NextPage(ctx, s.f, s.h, startPage)
+		s.Require().NoError(err)
+		s.Require().NotEmpty(records)
+		for _, r := range records {
+			got = append(got, r.Data[0])
+		}
+		startPage = next
+		pages++
+	}
+
+	s.Equal([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9}, got)
+	s.Equal(3, pages)
+}
+
+func (s *DataOpsSuite) TestNextPage_SkipsFullyTombstonedMiddlePage() {
+	ctx := context.Background()
+	ref, slot := s.newCollection("skip-empty-page")
+	s.insertN(ref, &slot, 1, 6) // A(1,2,3) B(4,5,6), 3 records/page here
+	s.Require().Equal(uint32(2), slot.PageCount)
+	pageA, pageB := slot.Head, slot.Tail
+
+	// splice a blank page between A and B — a page reachable in the chain
+	// with zero live records, distinct from B which has real content.
+	blank, err := Allocate(ctx, s.f, s.h, s.cycle())
+	s.Require().NoError(err)
+	blankView, err := newBlankDataPage(s.h.PageSize)
+	s.Require().NoError(err)
+	blankView.setHeader(pageB, blankView.freeStart, blankView.slotCount)
+	s.Require().NoError(blankView.finalize())
+	s.Require().NoError(WritePage(ctx, s.f, s.h, s.cycle(), blank, blankView.buf))
+
+	aView, err := readDataPage(ctx, s.f, s.h, pageA)
+	s.Require().NoError(err)
+	aView.setHeader(blank, aView.freeStart, aView.slotCount)
+	s.Require().NoError(aView.finalize())
+	s.Require().NoError(WritePage(ctx, s.f, s.h, s.cycle(), pageA, aView.buf))
+
+	records, next, err := NextPage(ctx, s.f, s.h, pageA)
+	s.Require().NoError(err)
+	s.Require().Len(records, 3)
+	s.Equal(byte(1), records[0].Data[0])
+	s.Equal(pageA, records[0].PageNum)
+	s.Equal(blank, next) // the blank page itself, not yet skipped past
+
+	records, next, err = NextPage(ctx, s.f, s.h, next)
+	s.Require().NoError(err)
+	s.Require().Len(records, 3)
+	s.Equal(byte(4), records[0].Data[0])
+	s.Equal(pageB, records[0].PageNum)
+	s.Equal(uint32(0), next)
+}
+
+func (s *DataOpsSuite) TestNextPage_EmptyCollectionHeadZero() {
+	ctx := context.Background()
+	_, slot := s.newCollection("empty")
+	s.Require().Equal(uint32(0), slot.Head)
+
+	// startPage == 0 isn't a scan callers are expected to make, but the
+	// walk loop simply doesn't execute — same "chain exhausted" outcome.
+	records, next, err := NextPage(ctx, s.f, s.h, slot.Head)
+	s.Require().NoError(err)
+	s.Nil(records)
+	s.Equal(uint32(0), next)
+}
+
+func (s *DataOpsSuite) TestNextPage_SurfacesCorruptedRecordWhenPageReachesIt() {
+	ctx := context.Background()
+	ref, slot := s.newCollection("corrupt-scan")
+	_, _, err := InsertRecord(ctx, s.f, s.h, s.cycle(), ref, &slot, makeRecord(1, 8))
+	s.Require().NoError(err)
+
+	view, err := readDataPage(ctx, s.f, s.h, slot.Head)
+	s.Require().NoError(err)
+	rSlot, err := view.slotAt(0)
+	s.Require().NoError(err)
+	view.buf[rSlot.offset+recordIDSize] ^= 0xFF // corrupt payload bytes past the id
+	s.Require().NoError(view.finalize())
+	s.Require().NoError(WritePage(ctx, s.f, s.h, s.cycle(), slot.Head, view.buf))
+
+	_, _, err = NextPage(ctx, s.f, s.h, slot.Head)
+	s.ErrorIs(err, ErrCorruptedDocument)
+}
+
+func (s *DataOpsSuite) TestNextPage_CorruptedCycleReturnsErrorInsteadOfHanging() {
+	ctx := context.Background()
+
+	pageNum, err := Allocate(ctx, s.f, s.h, s.cycle())
+	s.Require().NoError(err)
+	view, err := newBlankDataPage(s.h.PageSize)
+	s.Require().NoError(err)
+	view.setHeader(pageNum, view.freeStart, view.slotCount) // next points at itself, zero live records
+	s.Require().NoError(view.finalize())
+	s.Require().NoError(WritePage(ctx, s.f, s.h, s.cycle(), pageNum, view.buf))
+
+	_, _, err = NextPage(ctx, s.f, s.h, pageNum)
+	s.ErrorIs(err, ErrCorruptedDataChain)
+}
+
 // --- DeleteRecord ---
 
 func (s *DataOpsSuite) TestDelete_TombstonesWithoutFreeingPageWhenOthersRemainLive() {

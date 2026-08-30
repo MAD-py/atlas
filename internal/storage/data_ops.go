@@ -8,6 +8,13 @@ import (
 	"os"
 )
 
+// RecordAt pairs a record's bytes with where it lives.
+type RecordAt struct {
+	Data      []byte
+	PageNum   uint32
+	SlotIndex uint32
+}
+
 // maxDataChainLength bounds a collection's data-page chain walk, same
 // reasoning as maxCatalogChainLength in catalog_ops.go: the chain can never
 // legitimately be longer than the file's total page count, so exceeding
@@ -136,29 +143,56 @@ func FindRecordByID(ctx context.Context, f *os.File, h *Header, head uint32, id 
 			return nil, 0, 0, verr
 		}
 
-		for i := range uint32(view.slotCount) {
-			slot, serr := view.slotAt(i)
-			if serr != nil {
-				return nil, 0, 0, serr
-			}
-			if slot.isTombstone() {
+		for lr := range view.liveRecords() {
+			if len(lr.bytes) < recordIDSize || !bytes.Equal(lr.bytes[:recordIDSize], id[:]) {
 				continue
 			}
-			recBytes, rerr := view.recordBytes(slot)
-			if rerr != nil {
-				continue // can't safely read this slot; it can't be proven to be our target either
+			if crc32.ChecksumIEEE(lr.bytes) != lr.slot.checksum {
+				return nil, 0, 0, fmt.Errorf("%w: id %x at page %d slot %d", ErrCorruptedDocument, id, pageNum, lr.index)
 			}
-			if len(recBytes) < recordIDSize || !bytes.Equal(recBytes[:recordIDSize], id[:]) {
-				continue
-			}
-			if crc32.ChecksumIEEE(recBytes) != slot.checksum {
-				return nil, 0, 0, fmt.Errorf("%w: id %x at page %d slot %d", ErrCorruptedDocument, id, pageNum, i)
-			}
-			return recBytes, pageNum, i, nil
+			return lr.bytes, pageNum, lr.index, nil
 		}
 		pageNum = view.next
 	}
 	return nil, 0, 0, ErrDocumentNotFound
+}
+
+// NextPage returns every live, checksum-verified record found on the first
+// page in the collection's chain at or after startPage that has at least
+// one, plus the page number to pass as startPage on the next call to
+// continue the scan. A page with zero live records (fully tombstoned, or
+// genuinely blank) is skipped transparently — the caller never sees an
+// empty, non-final batch. next == 0 means the chain is exhausted; the
+// caller should stop calling. startPage must be a real page number
+// (typically a collection's Head for the first call, or a previous call's
+// own returned next) — callers never scan a collection whose Head is 0 in
+// the first place, so 0 is never a meaningful startPage to pass in.
+func NextPage(ctx context.Context, f *os.File, h *Header, startPage uint32) (records []RecordAt, next uint32, err error) {
+	pageNum := startPage
+	for visited := uint32(0); pageNum != 0; visited++ {
+		if visited >= maxDataChainLength(h) {
+			return nil, 0, ErrCorruptedDataChain
+		}
+		view, verr := readDataPage(ctx, f, h, pageNum)
+		if verr != nil {
+			return nil, 0, verr
+		}
+
+		var batch []RecordAt
+		for lr := range view.liveRecords() {
+			if crc32.ChecksumIEEE(lr.bytes) != lr.slot.checksum {
+				return nil, 0, fmt.Errorf("%w: page %d slot %d", ErrCorruptedDocument, pageNum, lr.index)
+			}
+			batch = append(batch, RecordAt{Data: lr.bytes, PageNum: pageNum, SlotIndex: lr.index})
+		}
+		if len(batch) > 0 {
+			return batch, view.next, nil
+		}
+
+		pageNum = view.next
+	}
+
+	return nil, 0, nil
 }
 
 // DeleteRecord tombstones the record matching id, tracking the previous
@@ -183,22 +217,15 @@ func DeleteRecord(ctx context.Context, f *os.File, h *Header, cycle *JournalCycl
 		}
 
 		found := false
-		for i := range uint32(view.slotCount) {
-			off, ok := dataSlotOffset(h.PageSize, i)
+		for lr := range view.liveRecords() {
+			if len(lr.bytes) < recordIDSize || !bytes.Equal(lr.bytes[:recordIDSize], id[:]) {
+				continue
+			}
+			off, ok := dataSlotOffset(h.PageSize, lr.index)
 			if !ok {
 				return ErrCorruptedDataPage
 			}
-			s := decodeDataSlot(view.buf[off : off+dataSlotSize])
-			if s.isTombstone() {
-				continue
-			}
-			recBytes, rerr := view.recordBytes(s)
-			if rerr != nil {
-				continue
-			}
-			if len(recBytes) < recordIDSize || !bytes.Equal(recBytes[:recordIDSize], id[:]) {
-				continue
-			}
+			s := lr.slot
 			s.flags |= dataSlotFlagTombstone
 			encodeDataSlot(view.buf[off:off+dataSlotSize], s)
 			found = true

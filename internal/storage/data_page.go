@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/crc32"
+	"iter"
 	"os"
 )
 
@@ -209,6 +210,41 @@ func (v *dataPageView) recordBytes(slot dataSlot) ([]byte, error) {
 		return nil, ErrCorruptedDataPage
 	}
 	return v.buf[start:end], nil
+}
+
+// liveRecord pairs a live slot with its already bounds-checked record bytes.
+type liveRecord struct {
+	index uint32
+	slot  dataSlot
+	bytes []byte
+}
+
+// liveRecords iterates a page's slots in order, yielding only the ones that
+// are live and whose bytes can be safely located — a slot that's tombstoned
+// is skipped without inspection, one whose offset/length don't check out is
+// skipped too (unprovable, not fatal — the same policy every reader of a
+// data page in this file already applies). Does NOT checksum-verify the
+// bytes it yields; callers that need that guarantee (return-to-caller paths
+// do, internal skip-past paths don't) do it themselves against slot.checksum.
+func (v *dataPageView) liveRecords() iter.Seq[liveRecord] {
+	return func(yield func(liveRecord) bool) {
+		for i := range uint32(v.slotCount) {
+			slot, err := v.slotAt(i)
+			if err != nil {
+				return // slotAt can't fail for i < slotCount; mirrors callers that abort on it
+			}
+			if slot.isTombstone() {
+				continue
+			}
+			recBytes, err := v.recordBytes(slot)
+			if err != nil {
+				continue // can't safely read this slot; skip past it
+			}
+			if !yield(liveRecord{index: i, slot: slot, bytes: recBytes}) {
+				return
+			}
+		}
+	}
 }
 
 func (v *dataPageView) liveBytes() (uint32, error) {
