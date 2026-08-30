@@ -14,11 +14,18 @@ var (
 	ErrClosed = errors.New("[Atlas] database is closed")
 	ErrLocked = errors.New("[Atlas] database file is already open by another connection")
 
+	ErrCorruptedPage = errors.New("[Atlas] page checksum mismatch")
+
+	ErrInvalidAtlasID = errors.New("[Atlas] invalid AtlasID string")
 	ErrJournalMissing = errors.New("[Atlas] dirty shutdown detected but no valid journal to recover")
 	ErrNotAnAtlasFile = errors.New("[Atlas] not a valid atlas database file")
 
 	ErrCorruptedHeader = errors.New("[Atlas] file header checksum mismatch")
 
+	ErrDocumentNotFound = errors.New("[Atlas] document not found")
+	ErrDocumentTooLarge = errors.New("[Atlas] document exceeds maximum size")
+
+	ErrCorruptedDocument = errors.New("[Atlas] document checksum mismatch")
 	ErrEmptyDatabasePath = errors.New("[Atlas] database path must not be empty")
 
 	ErrCollectionNotFound = errors.New("[Atlas] collection not found")
@@ -47,14 +54,22 @@ func wrapInternalErr(err error, detail string) error {
 	switch {
 	case errors.Is(err, file.ErrLocked):
 		sentinel = ErrLocked
-	case errors.Is(err, file.ErrEmptyDatabasePath):
-		sentinel = ErrEmptyDatabasePath
+	case errors.Is(err, storage.ErrCorruptedPage):
+		sentinel = ErrCorruptedPage
 	case errors.Is(err, storage.ErrJournalMissing):
 		sentinel = ErrJournalMissing
 	case errors.Is(err, storage.ErrNotAnAtlasFile):
 		sentinel = ErrNotAnAtlasFile
 	case errors.Is(err, storage.ErrCorruptedHeader):
 		sentinel = ErrCorruptedHeader
+	case errors.Is(err, storage.ErrDocumentNotFound):
+		sentinel = ErrDocumentNotFound
+	case errors.Is(err, storage.ErrDocumentTooLarge):
+		sentinel = ErrDocumentTooLarge
+	case errors.Is(err, storage.ErrCorruptedDocument):
+		sentinel = ErrCorruptedDocument
+	case errors.Is(err, file.ErrEmptyDatabasePath):
+		sentinel = ErrEmptyDatabasePath
 	case errors.Is(err, storage.ErrCollectionNotFound):
 		sentinel = ErrCollectionNotFound
 	case errors.Is(err, storage.ErrIncompatibleVersion):
