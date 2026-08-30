@@ -336,6 +336,75 @@ func (s *DataOpsSuite) TestDelete_EmptyingMiddlePage_RelinksAroundIt() {
 	s.NotEqual(pageC, reused)
 }
 
+// --- FreeCollectionDataPages ---
+
+func (s *DataOpsSuite) TestFreeCollectionDataPages_EmptyCollectionIsNoop() {
+	ctx := context.Background()
+	beforeFreeListHead := s.h.FreeListHead
+
+	err := FreeCollectionDataPages(ctx, s.f, s.h, s.cycle(), 0)
+	s.Require().NoError(err)
+	s.Equal(beforeFreeListHead, s.h.FreeListHead)
+}
+
+func (s *DataOpsSuite) TestFreeCollectionDataPages_SinglePage() {
+	ctx := context.Background()
+	ref, slot := s.newCollection("single")
+	s.insertN(ref, &slot, 1, 1)
+	page := slot.Head
+
+	err := FreeCollectionDataPages(ctx, s.f, s.h, s.cycle(), slot.Head)
+	s.Require().NoError(err)
+	s.Equal(page, s.h.FreeListHead)
+}
+
+func (s *DataOpsSuite) TestFreeCollectionDataPages_MultiPageChain() {
+	ctx := context.Background()
+	ref, slot := s.newCollection("multi")
+	s.insertN(ref, &slot, 1, 9) // 3 pages of 3 records each
+	s.Require().Equal(uint32(3), slot.PageCount)
+
+	var original []uint32
+	for pageNum := slot.Head; pageNum != 0; {
+		original = append(original, pageNum)
+		view, err := readDataPage(ctx, s.f, s.h, pageNum)
+		s.Require().NoError(err)
+		pageNum = view.next
+	}
+	s.Require().Len(original, 3)
+
+	s.Require().NoError(FreeCollectionDataPages(ctx, s.f, s.h, s.cycle(), slot.Head))
+
+	// every original page is now reachable through the free-list
+	var reused []uint32
+	for range original {
+		p, err := Allocate(ctx, s.f, s.h, s.cycle())
+		s.Require().NoError(err)
+		reused = append(reused, p)
+	}
+	s.ElementsMatch(original, reused)
+}
+
+// Unlike the read-only/tombstone-only walks above, this walk frees each
+// page as it visits it, so a self-loop can never be re-read as a live data
+// page the second time around — it surfaces as ErrNotADataPage on the
+// revisit, not the maxDataChainLength bound. Either way the walk
+// terminates instead of hanging, which is what this test actually proves.
+func (s *DataOpsSuite) TestFreeCollectionDataPages_DetectsCycleInsteadOfHanging() {
+	ctx := context.Background()
+
+	pageNum, err := Allocate(ctx, s.f, s.h, s.cycle())
+	s.Require().NoError(err)
+	view, err := newBlankDataPage(s.h.PageSize)
+	s.Require().NoError(err)
+	view.setHeader(pageNum, view.freeStart, view.slotCount) // next points at itself
+	s.Require().NoError(view.finalize())
+	s.Require().NoError(WritePage(ctx, s.f, s.h, s.cycle(), pageNum, view.buf))
+
+	err = FreeCollectionDataPages(ctx, s.f, s.h, s.cycle(), pageNum)
+	s.ErrorIs(err, ErrNotADataPage)
+}
+
 // --- readDataPage: wrong page type ---
 
 func (s *DataOpsSuite) TestReadDataPage_RejectsNonDataPage() {

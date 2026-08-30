@@ -235,6 +235,30 @@ func DeleteRecord(ctx context.Context, f *os.File, h *Header, cycle *JournalCycl
 	return ErrDocumentNotFound
 }
 
+// FreeCollectionDataPages walks the collection's data-page chain from head,
+// returning every page in it to the free-list. head == 0 (a collection that
+// never had a page) is a no-op. It never touches the collection's catalog
+// slot — the caller (e.g. a future DropCollection) is responsible for
+// tombstoning that separately, since the slot is about to go away anyway.
+func FreeCollectionDataPages(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, head uint32) error {
+	pageNum := head
+	for visited := uint32(0); pageNum != 0; visited++ {
+		if visited >= maxDataChainLength(h) {
+			return ErrCorruptedDataChain
+		}
+		view, err := readDataPage(ctx, f, h, pageNum)
+		if err != nil {
+			return err
+		}
+		next := view.next // capture before Free overwrites this page's bytes
+		if err := Free(ctx, f, h, cycle, pageNum); err != nil {
+			return err
+		}
+		pageNum = next
+	}
+	return nil
+}
+
 // freeEmptyDataPage unlinks pageNum (whose last live record was just
 // tombstoned) from the collection's chain and returns it to the free-list
 // immediately, rather than deferring reclaim to some later pass.

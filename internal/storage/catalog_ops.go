@@ -235,12 +235,11 @@ func writeSlotBytes(ctx context.Context, f *os.File, h *Header, cycle *JournalCy
 
 // RemoveCollectionSlot tombstones the named collection's catalog slot.
 //
-// This is deliberately NOT the spec's full DropCollection: it only frees
+// This is deliberately NOT the full DropCollection: it only frees
 // catalog-level bookkeeping. A future root-level DropCollection must first
-// walk and free the collection's own data-page chain (head..tail, not
-// touched here — data pages don't exist as a module yet), and only then
-// call this to reclaim the catalog slot. Calling this alone leaks the
-// collection's data pages.
+// call FreeCollectionDataPages (data_ops.go) to walk and free the
+// collection's own data-page chain, and only then call this to reclaim the
+// catalog slot. Calling this alone leaks the collection's data pages.
 func RemoveCollectionSlot(ctx context.Context, f *os.File, h *Header, cycle *JournalCycle, name string) error {
 	ref, slot, err := FindCollectionSlot(ctx, f, h, name)
 	if err != nil {
