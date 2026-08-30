@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+
+	"github.com/MAD-py/atlas/internal/file"
 )
 
 type RecoverySuite struct {
@@ -57,7 +59,7 @@ func (s *RecoverySuite) TestRecoverIfNeeded_NormalState_NoOp() {
 func (s *RecoverySuite) TestRecoverIfNeeded_OrphanedJournal_CleansUpAndOpens() {
 	// dirty=false but a stray journal exists — harmless (crash before step 2,
 	// or after step 4, of some prior cycle).
-	journalPath := journalPathFor(s.f.Name())
+	journalPath := file.JournalPathFor(s.f.Name())
 	s.Require().NoError(os.WriteFile(journalPath, encodeJournalHeader(0), 0o600))
 
 	recovered, err := RecoverIfNeeded(context.Background(), s.f)
@@ -77,7 +79,7 @@ func (s *RecoverySuite) TestRecoverIfNeeded_DirtyNoJournal_Refuses() {
 
 func (s *RecoverySuite) TestRecoverIfNeeded_DirtyCorruptJournal_Refuses() {
 	s.forceDirtyBit(true)
-	journalPath := journalPathFor(s.f.Name())
+	journalPath := file.JournalPathFor(s.f.Name())
 	s.Require().NoError(os.WriteFile(journalPath, []byte("not a journal file"), 0o600))
 
 	_, err := RecoverIfNeeded(context.Background(), s.f)
@@ -169,7 +171,7 @@ func (s *RecoverySuite) TestRecovery_SinglePageWrite() {
 	s.Require().NoError(err)
 	s.Equal(beforeInfo.Size(), afterInfo.Size())
 
-	_, err = os.Stat(journalPathFor(s.f.Name()))
+	_, err = os.Stat(file.JournalPathFor(s.f.Name()))
 	s.True(os.IsNotExist(err))
 
 	// Functional confirmation: the "deleted" record is back.
@@ -228,7 +230,7 @@ func (s *RecoverySuite) TestRecovery_NewPageAllocation() {
 	s.Require().NoError(err)
 	s.Equal(beforeData, gotData)
 
-	_, err = os.Stat(journalPathFor(s.f.Name()))
+	_, err = os.Stat(file.JournalPathFor(s.f.Name()))
 	s.True(os.IsNotExist(err))
 
 	// Functional confirmation: the never-committed 2nd record is gone, the
@@ -291,7 +293,7 @@ func (s *RecoverySuite) TestRecovery_SamePageWrittenTwice() {
 	s.Equal(beforeData, gotData)
 	s.Equal(byte(PageTypeData), gotData[0]) // restored as a data page, not the free-list marker it became mid-cycle
 
-	_, err = os.Stat(journalPathFor(s.f.Name()))
+	_, err = os.Stat(file.JournalPathFor(s.f.Name()))
 	s.True(os.IsNotExist(err))
 
 	// Functional confirmation: the "deleted" record is back.

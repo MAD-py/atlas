@@ -30,12 +30,6 @@ func journalRecordSize(pageSize uint32) int64 {
 	return journalRecordPageNumSize + int64(pageSize) + journalRecordChecksumSize
 }
 
-// journalPathFor derives the journal's path from the .db file's own path —
-// a sibling file, same directory, ".journal" appended.
-func journalPathFor(dbPath string) string {
-	return dbPath + ".journal"
-}
-
 func encodeJournalHeader(recordCount uint32) []byte {
 	buf := make([]byte, journalHeaderSize)
 	copy(buf[0:8], journalMagic[:])

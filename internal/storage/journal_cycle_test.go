@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+
+	"github.com/MAD-py/atlas/internal/file"
 )
 
 type JournalCycleSuite struct {
@@ -39,7 +41,7 @@ func (s *JournalCycleSuite) TestNewJournalCycle_CreatesJournalFileWithZeroRecord
 	cyc, err := NewJournalCycle(ctx, s.f, s.h)
 	s.Require().NoError(err)
 
-	info, err := os.Stat(journalPathFor(s.f.Name()))
+	info, err := os.Stat(file.JournalPathFor(s.f.Name()))
 	s.Require().NoError(err)
 	s.Equal(int64(journalHeaderSize), info.Size())
 	s.Equal(uint32(0), cyc.recordCount)
@@ -117,7 +119,7 @@ func (s *JournalCycleSuite) TestCommit_PersistsChangesAndDeletesJournal() {
 
 	s.Require().NoError(cyc.Commit(ctx, s.f, s.h))
 
-	_, err = os.Stat(journalPathFor(s.f.Name()))
+	_, err = os.Stat(file.JournalPathFor(s.f.Name()))
 	s.True(os.IsNotExist(err))
 
 	onDisk, err := ReadHeader(ctx, s.f)
@@ -172,7 +174,7 @@ func (s *JournalCycleSuite) TestAbort_RestoresOriginalPageContent() {
 	s.Equal(before, after)
 	s.Equal(beforeHeader, *s.h)
 
-	_, err = os.Stat(journalPathFor(s.f.Name()))
+	_, err = os.Stat(file.JournalPathFor(s.f.Name()))
 	s.True(os.IsNotExist(err))
 }
 
@@ -206,7 +208,7 @@ func (s *JournalCycleSuite) TestAbort_NoOpWhenNothingWasEverTouched() {
 
 	s.Require().NoError(cyc.Abort(ctx, s.f, s.h))
 
-	_, err = os.Stat(journalPathFor(s.f.Name()))
+	_, err = os.Stat(file.JournalPathFor(s.f.Name()))
 	s.True(os.IsNotExist(err))
 }
 

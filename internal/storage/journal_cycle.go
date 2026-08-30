@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+
+	"github.com/MAD-py/atlas/internal/file"
 )
 
 // JournalCycle is one MVP write operation's rollback-journal session: every
@@ -14,8 +16,7 @@ import (
 // belongs to whoever is orchestrating a sequence of operations, not to a
 // single page-level write.
 type JournalCycle struct {
-	file     *os.File
-	filePath string
+	file *os.File
 
 	pageSize    uint32
 	recordCount uint32
@@ -33,8 +34,7 @@ type JournalCycle struct {
 // NewJournalCycle creates (truncating any stale leftover) the .journal file
 // next to f and writes its initial header (record count 0).
 func NewJournalCycle(ctx context.Context, f *os.File, h *Header) (*JournalCycle, error) {
-	path := journalPathFor(f.Name())
-	jf, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	jf, err := file.CreateJournal(f)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrJournalOpenFailed, err)
 	}
@@ -44,7 +44,6 @@ func NewJournalCycle(ctx context.Context, f *os.File, h *Header) (*JournalCycle,
 	}
 	return &JournalCycle{
 		file:        jf,
-		filePath:    path,
 		pageSize:    h.PageSize,
 		snapshotted: make(map[uint32]struct{}),
 	}, nil
@@ -156,10 +155,11 @@ func (c *JournalCycle) Commit(ctx context.Context, f *os.File, h *Header) error 
 	}
 	*h = final
 
+	journalPath := c.file.Name()
 	if err := c.file.Close(); err != nil {
 		return fmt.Errorf("%w: %v", ErrJournalWriteFailed, err)
 	}
-	if err := os.Remove(c.filePath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(journalPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%w: %v", ErrJournalWriteFailed, err)
 	}
 	c.done = true
@@ -196,10 +196,11 @@ func (c *JournalCycle) Abort(ctx context.Context, f *os.File, h *Header) error {
 		*h = *restored
 	}
 
+	journalPath := c.file.Name()
 	if err := c.file.Close(); err != nil {
 		return fmt.Errorf("%w: %v", ErrJournalWriteFailed, err)
 	}
-	if err := os.Remove(c.filePath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(journalPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%w: %v", ErrJournalWriteFailed, err)
 	}
 	c.done = true

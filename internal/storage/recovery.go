@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+
+	"github.com/MAD-py/atlas/internal/file"
 )
 
 // truncateToPageCount discards anything past (h.PageCount+1)*h.PageSize —
@@ -69,8 +71,7 @@ func RecoverIfNeeded(ctx context.Context, f *os.File) (*Header, error) {
 		return nil, err
 	}
 
-	journalPath := journalPathFor(f.Name())
-	journal, openErr := os.OpenFile(journalPath, os.O_RDONLY, 0)
+	journal, openErr := file.OpenJournalReadOnly(f)
 	journalExists := openErr == nil
 	if openErr != nil && !os.IsNotExist(openErr) {
 		return nil, fmt.Errorf("%w: %v", ErrJournalOpenFailed, openErr)
@@ -84,6 +85,7 @@ func RecoverIfNeeded(ctx context.Context, f *os.File) (*Header, error) {
 	// Crash between the commit protocol's step 2 and step 3: replay the
 	// journal to roll back to the state before the interrupted cycle.
 	case h.Dirty && journalExists:
+		journalPath := journal.Name()
 		restored, replayErr := replayJournalIntoHeader(ctx, f, journal, h.PageSize)
 		closeErr := journal.Close()
 		if replayErr != nil {
@@ -99,13 +101,16 @@ func RecoverIfNeeded(ctx context.Context, f *os.File) (*Header, error) {
 
 	// Not explainable by crash timing alone (no journal to replay, yet the
 	// header claims a cycle was in progress) — refuse rather than guess.
+	// journal is nil here (the open above failed), so the path has to be
+	// derived rather than read off a handle that doesn't exist.
 	case h.Dirty && !journalExists:
-		return nil, fmt.Errorf("%w: %s", ErrJournalMissing, journalPath)
+		return nil, fmt.Errorf("%w: %s", ErrJournalMissing, file.JournalPathFor(f.Name()))
 
 	// Orphaned journal, harmless: crash before step 2 (nothing touched yet)
 	// or after step 4 (already fully committed) of some prior cycle — clean
 	// it up and open normally.
 	default: // !h.Dirty && journalExists
+		journalPath := journal.Name()
 		if err := journal.Close(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrJournalWriteFailed, err)
 		}
