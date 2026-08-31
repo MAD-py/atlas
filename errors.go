@@ -8,8 +8,20 @@ import (
 	"github.com/MAD-py/atlas/internal/storage"
 )
 
-// Sentinel errors, ordered by ascending identifier length. Each is the fixed
-// base message; wrapInternalErr adds the dynamic context at the call site.
+// --- Unexported sentinels ---
+
+// Raised directly by this package, never by internal/storage or
+// internal/file, so wrapInternalErr never touches these — each one signals
+// caller misuse of the API rather than a normal outcome worth exposing for
+// errors.Is. Same ascending-length ordering as the exported table above.
+var (
+	errNoCurrentDocument = errors.New("[Atlas] cursor has no current document")
+)
+
+// --- Exported sentinels ---
+
+// Ordered by ascending identifier length. Each is the fixed base message;
+// wrapInternalErr adds the dynamic context at the call site.
 var (
 	ErrClosed = errors.New("[Atlas] database is closed")
 	ErrLocked = errors.New("[Atlas] database file is already open by another connection")

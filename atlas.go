@@ -133,11 +133,12 @@ func (db *DB) DropCollection(ctx context.Context, name string) error {
 	if db.closed {
 		return ErrClosed
 	}
-	err := db.withJournalCycle(ctx, func(cycle *storage.JournalCycle) error {
-		_, slot, err := storage.FindCollectionSlot(ctx, db.f, db.h, name)
-		if err != nil {
-			return err
-		}
+	_, slot, err := storage.FindCollectionSlot(ctx, db.f, db.h, name)
+	if err != nil {
+		return wrapInternalErr(err, name)
+	}
+
+	err = db.withJournalCycle(ctx, func(cycle *storage.JournalCycle) error {
 		if err := storage.FreeCollectionDataPages(ctx, db.f, db.h, cycle, slot.Head); err != nil {
 			return err
 		}
