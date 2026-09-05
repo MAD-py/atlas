@@ -82,14 +82,22 @@ func (s *FilterSuite) values(docs []Document, field string) []any {
 	return out
 }
 
+func (s *FilterSuite) ids(docs []Document) []AtlasID {
+	var out []AtlasID
+	for _, doc := range docs {
+		out = append(out, doc.ID)
+	}
+	return out
+}
+
 // --- builders ---
 
 func (s *FilterSuite) TestBuilders_ProduceTheMatchingOperator() {
-	s.Equal(Filter{field: "a", op: opEq, value: 1}, Eq("a", 1))
-	s.Equal(Filter{field: "a", op: opGt, value: 1}, Gt("a", 1))
-	s.Equal(Filter{field: "a", op: opLt, value: 1}, Lt("a", 1))
-	s.Equal(Filter{field: "a", op: opGte, value: 1}, Gte("a", 1))
-	s.Equal(Filter{field: "a", op: opLte, value: 1}, Lte("a", 1))
+	s.Equal(leafFilter{field: "a", op: opEq, value: 1}, Eq("a", 1))
+	s.Equal(leafFilter{field: "a", op: opGt, value: 1}, Gt("a", 1))
+	s.Equal(leafFilter{field: "a", op: opLt, value: 1}, Lt("a", 1))
+	s.Equal(leafFilter{field: "a", op: opGte, value: 1}, Gte("a", 1))
+	s.Equal(leafFilter{field: "a", op: opLte, value: 1}, Lte("a", 1))
 }
 
 // --- matching ---
@@ -250,6 +258,99 @@ func (s *FilterSuite) TestFind_EmptyCollectionYieldsNoDocuments() {
 	_, col := s.newCollection(ctx)
 
 	s.Empty(s.find(ctx, col, Eq("anything", 1)))
+}
+
+// --- composition (And/Or) ---
+
+// panicFilter panics if matched, used to assert And/Or short-circuit instead
+// of evaluating every sub-filter regardless of an earlier result.
+type panicFilter struct{}
+
+func (panicFilter) matches(Document) bool { panic("panicFilter: should not be evaluated") }
+
+func (s *FilterSuite) TestAndOr_ComposeLeafFilters() {
+	ctx := context.Background()
+	_, col := s.newCollection(ctx)
+
+	docs := []map[string]any{
+		{"status": "active", "age": int64(10)},
+		{"status": "active", "age": int64(20)},
+		{"status": "inactive", "age": int64(25)},
+		{"status": "inactive", "age": int64(70)},
+		{"status": "vip", "age": int64(5)},
+		{"status": "vip", "age": int64(150)},
+	}
+	ids := make([]AtlasID, len(docs))
+	for i, fields := range docs {
+		ids[i] = s.insert(ctx, col, fields)
+	}
+
+	tests := []struct {
+		name   string
+		filter Filter
+		want   []AtlasID
+	}{
+		{
+			name:   "and requires every sub-filter to match",
+			filter: And(Eq("status", "active"), Gte("age", 18)),
+			want:   []AtlasID{ids[1]},
+		},
+		{
+			name:   "or matches if any sub-filter matches",
+			filter: Or(Eq("status", "active"), Gte("age", 70)),
+			want:   []AtlasID{ids[0], ids[1], ids[3], ids[5]},
+		},
+		{
+			name:   "and of or, nested three levels deep",
+			filter: And(Or(Eq("status", "active"), Gt("age", 18)), Lt("age", 65)),
+			want:   []AtlasID{ids[0], ids[1], ids[2]},
+		},
+		{
+			name:   "or of and",
+			filter: Or(And(Eq("status", "active"), Gte("age", 18)), And(Eq("status", "vip"), Lt("age", 100))),
+			want:   []AtlasID{ids[1], ids[4]},
+		},
+		{
+			name:   "empty and matches every document",
+			filter: And(),
+			want:   ids,
+		},
+		{
+			name:   "empty or matches no document",
+			filter: Or(),
+			want:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			docs := s.find(ctx, col, tt.filter)
+			s.Equal(tt.want, s.ids(docs))
+		})
+	}
+}
+
+func (s *FilterSuite) TestAndOr_ShortCircuitInsteadOfEvaluatingEverySubFilter() {
+	ctx := context.Background()
+	_, col := s.newCollection(ctx)
+	s.insert(ctx, col, map[string]any{"a": int64(1)})
+
+	tests := []struct {
+		name   string
+		filter Filter
+		want   int
+	}{
+		{name: "and short-circuits on the first non-match", filter: And(Eq("a", int64(2)), panicFilter{}), want: 0},
+		{name: "or short-circuits on the first match", filter: Or(Eq("a", int64(1)), panicFilter{}), want: 1},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.NotPanics(func() {
+				s.Len(s.find(ctx, col, tt.filter), tt.want)
+			})
+		})
+	}
 }
 
 // --- multi-page scans ---

@@ -11,8 +11,7 @@ import (
 	"github.com/MAD-py/atlas/internal/storage"
 )
 
-// operator is Filter's comparison kind — unexported along with Filter's own
-// fields, see Filter's doc comment.
+// operator is a leafFilter's comparison kind.
 type operator int
 
 const (
@@ -40,13 +39,19 @@ func (op operator) satisfiedBy(order int) bool {
 	}
 }
 
-// Filter is a single comparison condition — a field name, a comparison
-// operator, and the value to compare against — used with Collection.Find.
-// Build one with Eq, Gt, Lt, Gte, or Lte; Filter's fields are unexported, so
-// these are the only way to construct one. A document whose field is
-// missing, or holds a value the filter can't meaningfully compare against,
-// simply doesn't match — Find never errors or panics because of a Filter.
-type Filter struct {
+// Filter is either a single comparison condition (built with Eq, Gt, Lt,
+// Gte, or Lte) or a composite of other Filters (And, Or), nestable to any
+// depth, used with Collection.Find. These functions are the only way to
+// construct one. A leaf comparison whose field is missing from a document,
+// or whose value the filter can't meaningfully compare against, simply
+// doesn't match — Find never errors or panics because of a Filter.
+type Filter interface {
+	matches(doc Document) bool
+}
+
+// leafFilter is a single comparison: a field name, a comparison operator,
+// and the value to compare against.
+type leafFilter struct {
 	field string
 	op    operator
 	value any
@@ -54,36 +59,76 @@ type Filter struct {
 
 // Eq builds a Filter matching documents whose field equals value.
 func Eq(field string, value any) Filter {
-	return Filter{field: field, op: opEq, value: value}
+	return leafFilter{field: field, op: opEq, value: value}
 }
 
 // Gt builds a Filter matching documents whose field is greater than value.
 func Gt(field string, value any) Filter {
-	return Filter{field: field, op: opGt, value: value}
+	return leafFilter{field: field, op: opGt, value: value}
 }
 
 // Lt builds a Filter matching documents whose field is less than value.
 func Lt(field string, value any) Filter {
-	return Filter{field: field, op: opLt, value: value}
+	return leafFilter{field: field, op: opLt, value: value}
 }
 
 // Gte builds a Filter matching documents whose field is greater than or
 // equal to value.
 func Gte(field string, value any) Filter {
-	return Filter{field: field, op: opGte, value: value}
+	return leafFilter{field: field, op: opGte, value: value}
 }
 
 // Lte builds a Filter matching documents whose field is less than or equal
 // to value.
 func Lte(field string, value any) Filter {
-	return Filter{field: field, op: opLte, value: value}
+	return leafFilter{field: field, op: opLte, value: value}
+}
+
+// andFilter matches a document only if every one of filters matches it.
+type andFilter struct {
+	filters []Filter
+}
+
+// orFilter matches a document if any one of filters matches it.
+type orFilter struct {
+	filters []Filter
+}
+
+// And builds a Filter matching a document only if every one of filters
+// matches it. And() with no filters matches every document (vacuously true).
+func And(filters ...Filter) Filter {
+	return andFilter{filters}
+}
+
+// Or builds a Filter matching a document if any one of filters matches it.
+// Or() with no filters matches no document (vacuously false).
+func Or(filters ...Filter) Filter {
+	return orFilter{filters}
+}
+
+func (f andFilter) matches(doc Document) bool {
+	for _, sub := range f.filters {
+		if !sub.matches(doc) {
+			return false
+		}
+	}
+	return true
+}
+
+func (f orFilter) matches(doc Document) bool {
+	for _, sub := range f.filters {
+		if sub.matches(doc) {
+			return true
+		}
+	}
+	return false
 }
 
 // matches never errors and never panics: a scan sees every document in the
 // collection, and a field being absent, or holding a type the filter can't
 // be compared against, is ordinary data — those documents simply don't
 // match.
-func (f Filter) matches(doc Document) bool {
+func (f leafFilter) matches(doc Document) bool {
 	stored, ok := doc.Fields[f.field]
 	if !ok {
 		return false

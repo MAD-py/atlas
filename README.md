@@ -162,13 +162,15 @@ n, err := users.Count(ctx) // O(1) — a running counter, not a scan
 ## Querying
 
 ```go
-type Filter struct{ /* ... */ } // build with Eq, Gt, Lt, Gte, Lte
+type Filter interface{ /* ... */ } // build with Eq, Gt, Lt, Gte, Lte, And, Or
 
 func Eq(field string, value any) Filter
 func Gt(field string, value any) Filter
 func Lt(field string, value any) Filter
 func Gte(field string, value any) Filter
 func Lte(field string, value any) Filter
+func And(filters ...Filter) Filter
+func Or(filters ...Filter) Filter
 
 func (c *Collection) Find(ctx context.Context, filter Filter, opts ...FindOption) (*Cursor, error)
 func (c *Collection) FindFunc(ctx context.Context, pred func(Document) bool, opts ...FindOption) (*Cursor, error)
@@ -181,6 +183,17 @@ cur, err := users.Find(ctx, atlas.Gte("age", 18))
 ```
 
 A `Filter` never errors and never panics, no matter what the collection actually contains: a document missing the field simply doesn't match, and a field holding a type the value can't meaningfully compare against (say, `Gt("age", 18)` against a document where `"age"` is a string) also just doesn't match — it's treated as ordinary, heterogeneous data, not a fault. Numbers compare by value regardless of their specific Go type on either side (an `int` filter value matches an `int64` field, for instance), strings compare lexicographically, and `time.Time` values compare chronologically. Two values that aren't both numbers, both strings, or both times are compared with plain equality for `Eq` and never match for the ordering operators.
+
+`And`/`Or` combine any number of `Filter`s, and nest to any depth since they return a `Filter` themselves:
+
+```go
+cur, err := users.Find(ctx, atlas.And(
+	atlas.Or(atlas.Eq("status", "active"), atlas.Gt("age", 18)),
+	atlas.Lt("age", 65),
+))
+```
+
+`And` with no filters matches every document; `Or` with no filters matches none.
 
 `FindFunc` is the escape hatch for anything a `Filter` can't express — it calls an arbitrary predicate for every document instead:
 
