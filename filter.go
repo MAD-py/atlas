@@ -211,20 +211,22 @@ func WithOffset(n int) FindOption {
 // structurally valid data belonging to different documents than the ones it
 // would otherwise have reached.
 type Cursor struct {
-	col      *Collection
-	ctx      context.Context
-	match    func(Document) bool
-	buf      []storage.RecordAt
-	pos      int
-	nextPage uint32
-	current  Document
-	valid    bool
-	err      error
-	closed   bool
+	col   *Collection
+	ctx   context.Context
+	match func(Document) bool
 
 	limit    int
 	skip     int
 	returned int
+
+	buf      []storage.RecordAt
+	pos      int
+	nextPage uint32
+
+	current Document
+	valid   bool
+	err     error
+	closed  bool
 }
 
 // Next serves documents out of the page batch already in hand, fetching the
