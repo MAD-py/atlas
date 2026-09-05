@@ -7,8 +7,11 @@ import (
 	"github.com/MAD-py/atlas/internal/storage"
 )
 
-// Update is a changeset rather than a plain map so removing a field stays
-// distinguishable from setting it to null.
+// Update is a changeset for Collection.Update: Set adds or overwrites the
+// given fields, Unset removes the named ones, and every other field is left
+// untouched. Using a changeset instead of a plain map keeps "remove this
+// field" distinguishable from "set it to null" — and if the same key
+// appears in both Set and Unset, Set wins.
 type Update struct {
 	Set   map[string]any
 	Unset []string
@@ -23,8 +26,10 @@ type Collection struct {
 	name string
 }
 
-// Insert always mints the stored id: a non-zero doc.ID is ignored rather
-// than honored or rejected.
+// Insert stores doc and returns its new id. Insert always mints the stored
+// id itself: a non-zero doc.ID is ignored rather than honored or rejected.
+// It returns ErrDocumentTooLarge if the encoded document doesn't fit a
+// single blank page.
 func (c *Collection) Insert(ctx context.Context, doc Document) (AtlasID, error) {
 	if c.db.closed {
 		return AtlasID{}, ErrClosed
@@ -55,6 +60,8 @@ func (c *Collection) Insert(ctx context.Context, doc Document) (AtlasID, error) 
 	return id, nil
 }
 
+// FindByID returns the document with the given id. It returns
+// ErrDocumentNotFound if no such document exists in the collection.
 func (c *Collection) FindByID(ctx context.Context, id AtlasID) (Document, error) {
 	if c.db.closed {
 		return Document{}, ErrClosed
@@ -77,6 +84,11 @@ func (c *Collection) FindByID(ctx context.Context, id AtlasID) (Document, error)
 	return Document{ID: storedID, Fields: fields}, nil
 }
 
+// Update merges changes into the existing document with the given id:
+// fields named in changes.Set are added or overwritten, fields named in
+// changes.Unset are removed, and every other field is left as it was. It
+// returns ErrDocumentNotFound if no such document exists, or
+// ErrDocumentTooLarge if the merged document no longer fits a blank page.
 func (c *Collection) Update(ctx context.Context, id AtlasID, changes Update) error {
 	if c.db.closed {
 		return ErrClosed
@@ -104,6 +116,11 @@ func (c *Collection) Update(ctx context.Context, id AtlasID, changes Update) err
 	})
 }
 
+// Replace discards every field of the document with the given id and stores
+// fields in their place, keeping the same id. Unlike Update, fields not
+// present in the new map do not survive. It returns ErrDocumentNotFound if
+// no such document exists, or ErrDocumentTooLarge if fields doesn't fit a
+// blank page.
 func (c *Collection) Replace(ctx context.Context, id AtlasID, fields map[string]any) error {
 	if c.db.closed {
 		return ErrClosed
@@ -150,6 +167,8 @@ func (c *Collection) rewriteRecord(ctx context.Context, id AtlasID, build func(h
 	return nil
 }
 
+// Delete removes the document with the given id from the collection. It
+// returns ErrDocumentNotFound if no such document exists.
 func (c *Collection) Delete(ctx context.Context, id AtlasID) error {
 	if c.db.closed {
 		return ErrClosed
@@ -169,8 +188,9 @@ func (c *Collection) Delete(ctx context.Context, id AtlasID) error {
 	return nil
 }
 
-// Count reads the catalog slot's running counter instead of scanning the
-// data-page chain; the counter is maintained by every insert and delete.
+// Count returns the number of documents in the collection. It reads the
+// catalog slot's running counter instead of scanning the data-page chain —
+// O(1), maintained incrementally by every Insert/Delete/Update/Replace.
 func (c *Collection) Count(ctx context.Context) (int, error) {
 	if c.db.closed {
 		return 0, ErrClosed

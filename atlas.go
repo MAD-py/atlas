@@ -1,3 +1,10 @@
+// Package atlas is an embedded document database: JSON-like documents
+// grouped into collections, stored in a single .db file with no server
+// process. Open a file with Open, create collections with
+// DB.CreateCollection, and use Insert/FindByID/Update/Replace/Delete/Count
+// and Find/FindFunc on a Collection to work with documents. Errors are
+// sentinel values (ErrDocumentNotFound, ErrCollectionNotFound, ...), checked
+// with errors.Is.
 package atlas
 
 import (
@@ -17,12 +24,19 @@ type atlasConfig struct {
 // exists, since those values are already fixed in its header.
 type Option func(*atlasConfig)
 
+// WithPageSize sets the .db file's page size in bytes at creation time
+// (4096 if omitted). Has no effect when opening a file that already exists,
+// since page size is fixed once and stored in the file's header.
 func WithPageSize(pageSize uint32) Option {
 	return func(c *atlasConfig) {
 		c.pageSize = pageSize
 	}
 }
 
+// DB is an open connection to a single .db file. Only one DB may have a
+// given file open at a time: Open takes an exclusive, cross-platform lock
+// for as long as the connection stays open. A *DB and the Collections it
+// creates are not safe for concurrent use from multiple goroutines.
 type DB struct {
 	f      *os.File
 	h      *storage.Header
@@ -32,7 +46,8 @@ type DB struct {
 // Open creates path if it doesn't exist yet, takes an exclusive lock on it,
 // then either bootstraps a brand-new file or recovers/reopens an existing
 // one. Options only apply to the brand-new-file path — an existing file's
-// page size is already fixed in its header.
+// page size is already fixed in its header. path does not need a .db
+// extension; Open appends one if it's missing.
 func Open(ctx context.Context, path string, opts ...Option) (*DB, error) {
 	cfg := &atlasConfig{}
 	for _, opt := range opts {
@@ -73,7 +88,8 @@ func Open(ctx context.Context, path string, opts ...Option) (*DB, error) {
 	return &DB{f: f, h: h}, nil
 }
 
-// Close is idempotent: a second and later call returns nil without
+// Close releases the exclusive lock on the underlying file and closes it.
+// It is idempotent: a second and later call returns nil without
 // re-attempting the unlock/close.
 func (db *DB) Close() error {
 	if db.closed {
@@ -105,6 +121,9 @@ func (db *DB) withJournalCycle(ctx context.Context, fn func(*storage.JournalCycl
 	return cycle.Commit(ctx, db.f, db.h)
 }
 
+// CreateCollection creates a new, empty collection named name and returns a
+// handle to it. It returns ErrCollectionAlreadyExists if a collection with
+// that name already exists, and ErrCollectionNameTooLong if name is too long.
 func (db *DB) CreateCollection(ctx context.Context, name string) (*Collection, error) {
 	if db.closed {
 		return nil, ErrClosed
@@ -119,6 +138,9 @@ func (db *DB) CreateCollection(ctx context.Context, name string) (*Collection, e
 	return &Collection{db: db, name: name}, nil
 }
 
+// Collection returns a handle to the existing collection named name. It
+// returns ErrCollectionNotFound if no such collection exists — Collection
+// never creates one implicitly.
 func (db *DB) Collection(ctx context.Context, name string) (*Collection, error) {
 	if db.closed {
 		return nil, ErrClosed
@@ -129,6 +151,9 @@ func (db *DB) Collection(ctx context.Context, name string) (*Collection, error) 
 	return &Collection{db: db, name: name}, nil
 }
 
+// DropCollection permanently deletes the named collection and every
+// document in it. It returns ErrCollectionNotFound if no such collection
+// exists.
 func (db *DB) DropCollection(ctx context.Context, name string) error {
 	if db.closed {
 		return ErrClosed

@@ -9,15 +9,20 @@ import (
 	"time"
 )
 
+// AtlasIDSize is the fixed byte length of an AtlasID.
 const AtlasIDSize = 12
 
-// AtlasID: 4 bytes Unix-seconds timestamp + 4 bytes random + 4 bytes counter,
-// all big-endian so raw byte comparison already sorts chronologically.
+// AtlasID is a 12-byte, engine-generated document identifier: a 4-byte
+// Unix-seconds timestamp, 4 bytes of randomness, and a 4-byte counter, all
+// big-endian so raw byte comparison already sorts ids chronologically.
+// Callers never choose an AtlasID's value — Insert always mints its own.
 type AtlasID [AtlasIDSize]byte
 
 // idCounter resets on every process restart; cross-restart uniqueness relies on the random bytes, not this counter.
 var idCounter uint32
 
+// NewAtlasID generates a new AtlasID from the current time, plus random and
+// counter bytes so ids minted within the same second stay distinct.
 func NewAtlasID() (AtlasID, error) {
 	var id AtlasID
 	binary.BigEndian.PutUint32(id[0:4], uint32(time.Now().Unix()))
@@ -65,6 +70,12 @@ func ParseAtlasID(s string) (AtlasID, error) {
 	return id, nil
 }
 
+// Document is a stored record: an id and a schema-less set of fields. The
+// same type is used for both writing and reading. On Insert, ID is ignored —
+// the engine always mints its own; on read, ID is always populated with the
+// document's real id. Fields may hold nil, bool, any signed Go integer type,
+// float64, string, time.Time, []any, or map[string]any (nested documents);
+// a value of any other type makes Insert/Update/Replace fail.
 type Document struct {
 	ID     AtlasID
 	Fields map[string]any

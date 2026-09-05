@@ -11,10 +11,8 @@ import (
 	"github.com/MAD-py/atlas/internal/storage"
 )
 
-// operator and Filter's fields are deliberately unexported: Eq/Gt/Lt/Gte/Lte
-// are the only sanctioned way to build a Filter, so a caller can never
-// construct one with a field left unset or an operator that doesn't match
-// its own value's shape.
+// operator is Filter's comparison kind — unexported along with Filter's own
+// fields, see Filter's doc comment.
 type operator int
 
 const (
@@ -42,28 +40,41 @@ func (op operator) satisfiedBy(order int) bool {
 	}
 }
 
+// Filter is a single comparison condition — a field name, a comparison
+// operator, and the value to compare against — used with Collection.Find.
+// Build one with Eq, Gt, Lt, Gte, or Lte; Filter's fields are unexported, so
+// these are the only way to construct one. A document whose field is
+// missing, or holds a value the filter can't meaningfully compare against,
+// simply doesn't match — Find never errors or panics because of a Filter.
 type Filter struct {
 	field string
 	op    operator
 	value any
 }
 
+// Eq builds a Filter matching documents whose field equals value.
 func Eq(field string, value any) Filter {
 	return Filter{field: field, op: opEq, value: value}
 }
 
+// Gt builds a Filter matching documents whose field is greater than value.
 func Gt(field string, value any) Filter {
 	return Filter{field: field, op: opGt, value: value}
 }
 
+// Lt builds a Filter matching documents whose field is less than value.
 func Lt(field string, value any) Filter {
 	return Filter{field: field, op: opLt, value: value}
 }
 
+// Gte builds a Filter matching documents whose field is greater than or
+// equal to value.
 func Gte(field string, value any) Filter {
 	return Filter{field: field, op: opGte, value: value}
 }
 
+// Lte builds a Filter matching documents whose field is less than or equal
+// to value.
 func Lte(field string, value any) Filter {
 	return Filter{field: field, op: opLte, value: value}
 }
@@ -184,6 +195,8 @@ func asFloat(v any) (float64, bool) {
 	return 0, false
 }
 
+// FindOption configures a Find or FindFunc scan. See WithLimit and
+// WithOffset.
 type FindOption func(*findConfig)
 
 type findConfig struct {
@@ -191,19 +204,26 @@ type findConfig struct {
 	offset int
 }
 
-// n <= 0 means unlimited (the default). Once reached, Next stops before
-// fetching another page.
+// WithLimit stops a scan after n matches. n <= 0 means unlimited (the
+// default). Once reached, Next stops before fetching another page.
 func WithLimit(n int) FindOption {
 	return func(c *findConfig) { c.limit = n }
 }
 
-// n <= 0 means no skipping (the default). A skipped match still has to be
-// decoded and tested — there's no index to jump ahead with — but it's
+// WithOffset skips the first n matches of a scan before it starts yielding
+// any. n <= 0 means no skipping (the default). A skipped match still has to
+// be decoded and tested — there's no index to jump ahead with — but it's
 // discarded immediately rather than held onto.
 func WithOffset(n int) FindOption {
 	return func(c *findConfig) { c.offset = n }
 }
 
+// Cursor iterates the documents matched by a Find or FindFunc scan, one page
+// of the collection at a time. Call Next to advance, Document to read the
+// current match, Err to check what (if anything) stopped the scan, and
+// Close when done — or call Collect to drain every remaining match into a
+// slice at once.
+//
 // Nothing protects a scan from concurrent mutation: a write to the same
 // collection between two Next calls can make the rest of the scan skip
 // documents or return one twice, and if the write frees a page that is then
@@ -229,8 +249,10 @@ type Cursor struct {
 	closed  bool
 }
 
-// Next serves documents out of the page batch already in hand, fetching the
-// next page only once that batch is drained.
+// Next advances the cursor to the next matching document, returning false
+// once the scan is exhausted, the cursor is closed, or an error occurs (see
+// Err). It serves documents out of the page batch already in hand, fetching
+// the next page only once that batch is drained.
 func (cur *Cursor) Next() bool {
 	if cur.closed || cur.err != nil {
 		return false
@@ -289,6 +311,8 @@ func (cur *Cursor) Next() bool {
 	}
 }
 
+// Document returns the document the most recent call to Next matched. It
+// returns an error if Next has not yet been called, or last returned false.
 func (cur *Cursor) Document() (Document, error) {
 	if cur.closed || !cur.valid {
 		return Document{}, errNoCurrentDocument
@@ -296,6 +320,8 @@ func (cur *Cursor) Document() (Document, error) {
 	return cur.current, nil
 }
 
+// Err returns the error that stopped the scan, if any. It is nil if the
+// scan simply ran out of matching documents.
 func (cur *Cursor) Err() error {
 	return cur.err
 }
@@ -326,12 +352,17 @@ func (cur *Cursor) Collect() ([]Document, error) {
 	return docs, nil
 }
 
+// Find scans the collection for documents matching filter and returns a
+// cursor over them. Options bound how much of the collection the scan
+// touches — see WithLimit and WithOffset.
 func (c *Collection) Find(ctx context.Context, filter Filter, opts ...FindOption) (*Cursor, error) {
 	return c.FindFunc(ctx, filter.matches, opts...)
 }
 
-// FindFunc scans the whole collection by construction: the engine can't
-// inspect a closure the way it can a Filter.
+// FindFunc scans the collection, calling pred for every document and
+// returning a cursor over the ones it accepts. It scans the whole collection
+// by construction: the engine can't inspect a closure the way it can a
+// Filter.
 func (c *Collection) FindFunc(ctx context.Context, pred func(Document) bool, opts ...FindOption) (*Cursor, error) {
 	if c.db.closed {
 		return nil, ErrClosed
