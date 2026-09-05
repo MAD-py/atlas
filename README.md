@@ -90,7 +90,7 @@ type Document struct {
 doc := atlas.Document{Fields: map[string]any{"name": "Ada", "age": int64(36)}}
 ```
 
-`Fields` can hold `nil`, `bool`, any signed Go integer type, `float64`, `string`, `time.Time`, `[]any`, or `map[string]any` for nested documents — a value of any other type makes a write fail. Values read back from the database always come back as the same handful of concrete types regardless of what you inserted: any integer type becomes `int64`, for instance.
+`Fields` can hold `nil`, `bool`, any signed Go integer type, `float64`, `string`, `time.Time`, `Date`, `[]any`, or `map[string]any` for nested documents — a value of any other type makes a write fail. Values read back from the database always come back as the same handful of concrete types regardless of what you inserted: any integer type becomes `int64`, for instance.
 
 `ID` is always an `AtlasID`, a 12-byte id the engine generates itself — setting `Document.ID` before an insert has no effect. `AtlasID`'s bytes are ordered so two ids compare in the order they were created, and that holds for the 24-character hex string form too:
 
@@ -101,6 +101,17 @@ back, err := atlas.ParseAtlasID(s)
 ```
 
 `AtlasID` also implements `encoding.TextMarshaler`/`TextUnmarshaler`, so `encoding/json` renders it as that same hex string automatically instead of an array of 12 numbers — a `Document` round-trips through `json.Marshal`/`Unmarshal` without any extra work.
+
+`Date` is a date-only value — no time-of-day component, unlike a plain `time.Time` field (which Atlas treats as a full timestamp). Build one with `NewDate` and it stores and reads back the same way any other field does:
+
+```go
+users.Insert(ctx, atlas.Document{
+	Fields: map[string]any{"name": "Ada", "birthday": atlas.NewDate(1815, time.December, 10)},
+})
+
+doc, err := users.FindByID(ctx, id)
+doc.Fields["birthday"].(atlas.Date).String() // "1815-12-10"
+```
 
 ## Inserting documents
 
@@ -182,7 +193,7 @@ func (c *Collection) FindFunc(ctx context.Context, pred func(Document) bool, opt
 cur, err := users.Find(ctx, atlas.Gte("age", 18))
 ```
 
-A `Filter` never errors and never panics, no matter what the collection actually contains: a document missing the field simply doesn't match, and a field holding a type the value can't meaningfully compare against (say, `Gt("age", 18)` against a document where `"age"` is a string) also just doesn't match — it's treated as ordinary, heterogeneous data, not a fault. Numbers compare by value regardless of their specific Go type on either side (an `int` filter value matches an `int64` field, for instance), strings compare lexicographically, and `time.Time` values compare chronologically. Two values that aren't both numbers, both strings, or both times are compared with plain equality for `Eq` and never match for the ordering operators.
+A `Filter` never errors and never panics, no matter what the collection actually contains: a document missing the field simply doesn't match, and a field holding a type the value can't meaningfully compare against (say, `Gt("age", 18)` against a document where `"age"` is a string) also just doesn't match — it's treated as ordinary, heterogeneous data, not a fault. Numbers compare by value regardless of their specific Go type on either side (an `int` filter value matches an `int64` field, for instance), strings compare lexicographically, and `time.Time` and `Date` values each compare chronologically among their own type. Two values that aren't both numbers, both strings, or both the same time-like type are compared with plain equality for `Eq` and never match for the ordering operators.
 
 `And`/`Or` combine any number of `Filter`s, and nest to any depth since they return a `Filter` themselves:
 

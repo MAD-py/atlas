@@ -162,6 +162,11 @@ func (f leafFilter) matches(doc Document) bool {
 			return f.op.satisfiedBy(a.Compare(b))
 		}
 	}
+	if a, aok := stored.(Date); aok {
+		if b, bok := f.value.(Date); bok {
+			return f.op.satisfiedBy(a.Time().Compare(b.Time()))
+		}
+	}
 
 	if f.op == opEq {
 		return reflect.DeepEqual(stored, f.value)

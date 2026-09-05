@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -46,12 +47,13 @@ func (s *CollectionSuite) TestInsertThenFindByID_RoundTrips() {
 	_, col := s.newCollection(ctx)
 
 	fields := map[string]any{
-		"name":   "ada",
-		"age":    int64(36),
-		"score":  1.5,
-		"active": true,
-		"tags":   []any{"a", "b"},
-		"note":   nil,
+		"name":     "ada",
+		"age":      int64(36),
+		"score":    1.5,
+		"active":   true,
+		"tags":     []any{"a", "b"},
+		"note":     nil,
+		"birthday": NewDate(1815, time.December, 10),
 	}
 
 	id, err := col.Insert(ctx, Document{Fields: fields})

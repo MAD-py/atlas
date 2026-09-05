@@ -74,8 +74,9 @@ func ParseAtlasID(s string) (AtlasID, error) {
 // same type is used for both writing and reading. On Insert, ID is ignored —
 // the engine always mints its own; on read, ID is always populated with the
 // document's real id. Fields may hold nil, bool, any signed Go integer type,
-// float64, string, time.Time, []any, or map[string]any (nested documents);
-// a value of any other type makes Insert/Update/Replace fail.
+// float64, string, time.Time, Date (a distinct, date-only value with no
+// time-of-day component), []any, or map[string]any (nested documents); a
+// value of any other type makes Insert/Update/Replace fail.
 type Document struct {
 	ID     AtlasID
 	Fields map[string]any

@@ -253,6 +253,37 @@ func (s *FilterSuite) TestFind_TimeComparisonOrders() {
 	s.Len(docs, 2)
 }
 
+func (s *FilterSuite) TestFind_DateComparisonOrders() {
+	ctx := context.Background()
+	_, col := s.newCollection(ctx)
+
+	base := NewDate(2026, time.January, 1)
+	var ids []AtlasID
+	for i := range 3 {
+		ids = append(ids, s.insert(ctx, col, map[string]any{"on": NewDate(2026, time.January, 1+i)}))
+	}
+
+	tests := []struct {
+		name   string
+		filter Filter
+		want   []AtlasID
+	}{
+		{name: "eq", filter: Eq("on", NewDate(2026, time.January, 2)), want: []AtlasID{ids[1]}},
+		{name: "gt", filter: Gt("on", NewDate(2026, time.January, 2)), want: []AtlasID{ids[2]}},
+		{name: "lt", filter: Lt("on", NewDate(2026, time.January, 2)), want: []AtlasID{ids[0]}},
+		{name: "lte", filter: Lte("on", NewDate(2026, time.January, 2)), want: []AtlasID{ids[0], ids[1]}},
+		{name: "gte", filter: Gte("on", base), want: ids},
+		{name: "a time.Time value never matches a Date field", filter: Eq("on", base.Time()), want: nil},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			docs := s.find(ctx, col, tt.filter)
+			s.Equal(tt.want, s.ids(docs))
+		})
+	}
+}
+
 func (s *FilterSuite) TestFind_EmptyCollectionYieldsNoDocuments() {
 	ctx := context.Background()
 	_, col := s.newCollection(ctx)
