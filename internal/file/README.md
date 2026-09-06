@@ -51,5 +51,5 @@ The `.db` file is more permissive (`0o644`, owner read/write and everyone else r
 
 | Sentinel | Message |
 |---|---|
-| `ErrLocked` | `"[Atlas] database file is already open by another connection"` |
-| `ErrEmptyDatabasePath` | `"[Atlas] database path must not be empty"` |
+| `ErrLocked` | `"database file is already open by another connection"` |
+| `ErrEmptyDatabasePath` | `"database path must not be empty"` |

@@ -37,17 +37,17 @@ func (c *Collection) Insert(ctx context.Context, doc Document) (AtlasID, error) 
 
 	id, err := NewAtlasID()
 	if err != nil {
-		return AtlasID{}, err
+		return AtlasID{}, wrapCollectionErr(err, c.name)
 	}
 
 	record, err := encoding.Marshal(id, doc.Fields)
 	if err != nil {
-		return AtlasID{}, err
+		return AtlasID{}, wrapDocumentErr(err, c.name, id)
 	}
 
 	ref, slot, err := storage.FindCollectionSlot(ctx, c.db.f, c.db.h, c.name)
 	if err != nil {
-		return AtlasID{}, wrapInternalErr(err, c.name)
+		return AtlasID{}, wrapCollectionErr(err, c.name)
 	}
 
 	err = c.db.withJournalCycle(ctx, func(cycle *storage.JournalCycle) error {
@@ -55,7 +55,7 @@ func (c *Collection) Insert(ctx context.Context, doc Document) (AtlasID, error) 
 		return err
 	})
 	if err != nil {
-		return AtlasID{}, wrapInternalErr(err, c.name)
+		return AtlasID{}, wrapDocumentErr(err, c.name, id)
 	}
 	return id, nil
 }
@@ -69,17 +69,17 @@ func (c *Collection) FindByID(ctx context.Context, id AtlasID) (Document, error)
 
 	_, slot, err := storage.FindCollectionSlot(ctx, c.db.f, c.db.h, c.name)
 	if err != nil {
-		return Document{}, wrapInternalErr(err, c.name)
+		return Document{}, wrapCollectionErr(err, c.name)
 	}
 
 	record, _, _, err := storage.FindRecordByID(ctx, c.db.f, c.db.h, slot.Head, id)
 	if err != nil {
-		return Document{}, wrapInternalErr(err, c.name)
+		return Document{}, wrapDocumentErr(err, c.name, id)
 	}
 
 	storedID, fields, err := encoding.Unmarshal(record)
 	if err != nil {
-		return Document{}, err
+		return Document{}, wrapDocumentErr(err, c.name, id)
 	}
 	return Document{ID: storedID, Fields: fields}, nil
 }
@@ -144,12 +144,12 @@ func (c *Collection) Replace(ctx context.Context, id AtlasID, fields map[string]
 func (c *Collection) rewriteRecord(ctx context.Context, id AtlasID, build func(head uint32) ([]byte, error)) error {
 	ref, slot, err := storage.FindCollectionSlot(ctx, c.db.f, c.db.h, c.name)
 	if err != nil {
-		return wrapInternalErr(err, c.name)
+		return wrapCollectionErr(err, c.name)
 	}
 
 	record, err := build(slot.Head)
 	if err != nil {
-		return wrapInternalErr(err, c.name)
+		return wrapDocumentErr(err, c.name, id)
 	}
 
 	err = c.db.withJournalCycle(ctx, func(cycle *storage.JournalCycle) error {
@@ -162,7 +162,7 @@ func (c *Collection) rewriteRecord(ctx context.Context, id AtlasID, build func(h
 		return err
 	})
 	if err != nil {
-		return wrapInternalErr(err, c.name)
+		return wrapDocumentErr(err, c.name, id)
 	}
 	return nil
 }
@@ -176,14 +176,14 @@ func (c *Collection) Delete(ctx context.Context, id AtlasID) error {
 
 	ref, slot, err := storage.FindCollectionSlot(ctx, c.db.f, c.db.h, c.name)
 	if err != nil {
-		return wrapInternalErr(err, c.name)
+		return wrapCollectionErr(err, c.name)
 	}
 
 	err = c.db.withJournalCycle(ctx, func(cycle *storage.JournalCycle) error {
 		return storage.DeleteRecord(ctx, c.db.f, c.db.h, cycle, ref, &slot, id)
 	})
 	if err != nil {
-		return wrapInternalErr(err, c.name)
+		return wrapDocumentErr(err, c.name, id)
 	}
 	return nil
 }
@@ -198,7 +198,7 @@ func (c *Collection) Count(ctx context.Context) (int, error) {
 
 	_, slot, err := storage.FindCollectionSlot(ctx, c.db.f, c.db.h, c.name)
 	if err != nil {
-		return 0, wrapInternalErr(err, c.name)
+		return 0, wrapCollectionErr(err, c.name)
 	}
 	return int(slot.DocCount), nil
 }

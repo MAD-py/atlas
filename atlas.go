@@ -2,9 +2,10 @@
 // grouped into collections, stored in a single .db file with no server
 // process. Open a file with Open, create collections with
 // DB.CreateCollection, and use Insert/FindByID/Update/Replace/Delete/Count
-// and Find/FindFunc on a Collection to work with documents. Errors are
-// sentinel values (ErrDocumentNotFound, ErrCollectionNotFound, ...), checked
-// with errors.Is.
+// and Find/FindFunc on a Collection to work with documents. Every error is
+// an *Error: match its kind with errors.Is against a sentinel
+// (ErrDocumentNotFound, ErrCollectionNotFound, ...), or reach its Code and
+// the context it carries with errors.As.
 package atlas
 
 import (
@@ -56,19 +57,19 @@ func Open(ctx context.Context, path string, opts ...Option) (*DB, error) {
 
 	f, err := file.OpenDB(path)
 	if err != nil {
-		return nil, wrapInternalErr(err, path)
+		return nil, wrapPathErr(err, path)
 	}
 
 	if err := file.Lock(f); err != nil {
 		f.Close()
-		return nil, wrapInternalErr(err, f.Name())
+		return nil, wrapPathErr(err, f.Name())
 	}
 
 	info, err := f.Stat()
 	if err != nil {
 		file.Unlock(f)
 		f.Close()
-		return nil, err
+		return nil, wrapPathErr(err, f.Name())
 	}
 
 	var h *storage.Header
@@ -82,7 +83,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*DB, error) {
 	if err != nil {
 		file.Unlock(f)
 		f.Close()
-		return nil, wrapInternalErr(err, f.Name())
+		return nil, wrapPathErr(err, f.Name())
 	}
 
 	return &DB{f: f, h: h}, nil
@@ -133,7 +134,7 @@ func (db *DB) CreateCollection(ctx context.Context, name string) (*Collection, e
 		return err
 	})
 	if err != nil {
-		return nil, wrapInternalErr(err, name)
+		return nil, wrapCollectionErr(err, name)
 	}
 	return &Collection{db: db, name: name}, nil
 }
@@ -146,7 +147,7 @@ func (db *DB) Collection(ctx context.Context, name string) (*Collection, error) 
 		return nil, ErrClosed
 	}
 	if _, _, err := storage.FindCollectionSlot(ctx, db.f, db.h, name); err != nil {
-		return nil, wrapInternalErr(err, name)
+		return nil, wrapCollectionErr(err, name)
 	}
 	return &Collection{db: db, name: name}, nil
 }
@@ -160,7 +161,7 @@ func (db *DB) DropCollection(ctx context.Context, name string) error {
 	}
 	_, slot, err := storage.FindCollectionSlot(ctx, db.f, db.h, name)
 	if err != nil {
-		return wrapInternalErr(err, name)
+		return wrapCollectionErr(err, name)
 	}
 
 	err = db.withJournalCycle(ctx, func(cycle *storage.JournalCycle) error {
@@ -170,7 +171,7 @@ func (db *DB) DropCollection(ctx context.Context, name string) error {
 		return storage.RemoveCollectionSlot(ctx, db.f, db.h, cycle, name)
 	})
 	if err != nil {
-		return wrapInternalErr(err, name)
+		return wrapCollectionErr(err, name)
 	}
 	return nil
 }

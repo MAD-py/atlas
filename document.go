@@ -21,6 +21,15 @@ type AtlasID [AtlasIDSize]byte
 // idCounter resets on every process restart; cross-restart uniqueness relies on the random bytes, not this counter.
 var idCounter uint32
 
+// ParseAtlasID decodes an AtlasID.String() value back into an AtlasID.
+func ParseAtlasID(s string) (AtlasID, error) {
+	var id AtlasID
+	if err := id.UnmarshalText([]byte(s)); err != nil {
+		return AtlasID{}, err
+	}
+	return id, nil
+}
+
 // NewAtlasID generates a new AtlasID from the current time, plus random and
 // counter bytes so ids minted within the same second stay distinct.
 func NewAtlasID() (AtlasID, error) {
@@ -50,24 +59,24 @@ func (id AtlasID) MarshalText() ([]byte, error) {
 // UnmarshalText is MarshalText's inverse, used by encoding/json and by
 // ParseAtlasID.
 func (id *AtlasID) UnmarshalText(text []byte) error {
+	// The malformed input has no structured Error field to land in, so the
+	// specific reason extends the message instead.
 	decoded, err := hex.DecodeString(string(text))
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidAtlasID, err)
+		return &Error{
+			code:    CodeInvalidAtlasID,
+			message: fmt.Sprintf("%s: %v", ErrInvalidAtlasID.message, err),
+			err:     err,
+		}
 	}
 	if len(decoded) != AtlasIDSize {
-		return fmt.Errorf("%w: got %d bytes, want %d", ErrInvalidAtlasID, len(decoded), AtlasIDSize)
+		return &Error{
+			code:    CodeInvalidAtlasID,
+			message: fmt.Sprintf("%s: got %d bytes, want %d", ErrInvalidAtlasID.message, len(decoded), AtlasIDSize),
+		}
 	}
 	copy(id[:], decoded)
 	return nil
-}
-
-// ParseAtlasID decodes an AtlasID.String() value back into an AtlasID.
-func ParseAtlasID(s string) (AtlasID, error) {
-	var id AtlasID
-	if err := id.UnmarshalText([]byte(s)); err != nil {
-		return AtlasID{}, err
-	}
-	return id, nil
 }
 
 // Document is a stored record: an id and a schema-less set of fields. The

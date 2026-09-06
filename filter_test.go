@@ -226,9 +226,6 @@ func (s *FilterSuite) TestFind_EqOnNonOrderableValues() {
 	docs = s.find(ctx, col, Eq("note", nil))
 	s.Require().Len(docs, 1)
 	s.Equal(null, docs[0].ID)
-
-	// A bool field is not orderable, so an ordering operator never matches it.
-	s.Empty(s.find(ctx, col, Gt("active", true)))
 }
 
 func (s *FilterSuite) TestFind_TimeComparisonOrders() {
@@ -289,6 +286,108 @@ func (s *FilterSuite) TestFind_EmptyCollectionYieldsNoDocuments() {
 	_, col := s.newCollection(ctx)
 
 	s.Empty(s.find(ctx, col, Eq("anything", 1)))
+}
+
+// --- filter validation ---
+
+func (s *FilterSuite) TestFind_RejectsOrderingAgainstUnorderableValue() {
+	ctx := context.Background()
+	_, col := s.newCollection(ctx)
+	s.insert(ctx, col, map[string]any{"tags": []any{"a"}})
+
+	unorderable := []struct {
+		name  string
+		value any
+	}{
+		{name: "array", value: []any{1, 2}},
+		{name: "object", value: map[string]any{"a": 1}},
+		{name: "bool", value: true},
+		{name: "nil", value: nil},
+	}
+	operators := []struct {
+		name  string
+		build func(string, any) Filter
+	}{
+		{name: "gt", build: Gt},
+		{name: "lt", build: Lt},
+		{name: "gte", build: Gte},
+		{name: "lte", build: Lte},
+	}
+
+	for _, value := range unorderable {
+		for _, op := range operators {
+			s.Run(op.name+"/"+value.name, func() {
+				cur, err := col.Find(ctx, op.build("tags", value.value))
+				s.Nil(cur)
+				s.Require().ErrorIs(err, ErrInvalidFilter)
+
+				var atlasErr *Error
+				s.Require().ErrorAs(err, &atlasErr)
+				s.Equal(CodeInvalidFilter, atlasErr.Code())
+				s.Equal("tags", atlasErr.Field())
+				s.Equal(value.value, atlasErr.Value())
+			})
+		}
+	}
+}
+
+// The offending leaf's own field and value must survive being buried in a
+// composite, so the error points at the condition that has to change.
+func (s *FilterSuite) TestFind_RejectsUnorderableLeafNestedInComposite() {
+	ctx := context.Background()
+	_, col := s.newCollection(ctx)
+
+	tests := []struct {
+		name   string
+		filter Filter
+	}{
+		{name: "and", filter: And(Eq("name", "ada"), Gt("tags", []any{1}))},
+		{name: "or", filter: Or(Eq("name", "ada"), Lte("tags", []any{1}))},
+		{
+			name:   "or nested in and",
+			filter: And(Eq("name", "ada"), Or(Gte("age", 30), Lt("tags", []any{1}))),
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			_, err := col.Find(ctx, tt.filter)
+			s.Require().ErrorIs(err, ErrInvalidFilter)
+
+			var atlasErr *Error
+			s.Require().ErrorAs(err, &atlasErr)
+			s.Equal("tags", atlasErr.Field())
+			s.Equal([]any{1}, atlasErr.Value())
+		})
+	}
+}
+
+// Eq is exempt: structural equality is well defined for every value.
+func (s *FilterSuite) TestFind_EqAgainstUnorderableValueStaysLegal() {
+	ctx := context.Background()
+	_, col := s.newCollection(ctx)
+
+	tags := s.insert(ctx, col, map[string]any{"tags": []any{"a", "b"}})
+	active := s.insert(ctx, col, map[string]any{"active": true})
+	null := s.insert(ctx, col, map[string]any{"note": nil})
+
+	tests := []struct {
+		name   string
+		filter Filter
+		want   AtlasID
+	}{
+		{name: "array", filter: Eq("tags", []any{"a", "b"}), want: tags},
+		{name: "bool", filter: Eq("active", true), want: active},
+		{name: "nil", filter: Eq("note", nil), want: null},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			docs := s.find(ctx, col, tt.filter)
+			s.Require().Len(docs, 1)
+			s.Equal(tt.want, docs[0].ID)
+		})
+	}
 }
 
 // --- composition (And/Or) ---

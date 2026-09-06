@@ -284,6 +284,25 @@ if errors.Is(err, atlas.ErrDocumentNotFound) {
 | `ErrDocumentNotFound` | No document with that id exists in the collection. |
 | `ErrDocumentTooLarge` | A document doesn't fit within a single internal page. |
 | `ErrInvalidAtlasID` | `ParseAtlasID`/`UnmarshalText` was given a string that isn't a valid `AtlasID`. |
+| `ErrInvalidFilter` | `Find` was given a filter no document could satisfy — `Gt`/`Lt`/`Gte`/`Lte` against a value with no defined order, such as an array or a bool. |
+| `ErrNoCurrentDocument` | `Cursor.Document` was called without a preceding `Next` that returned `true`. |
+| `ErrInternal` | A failure below the public API with no sentinel of its own. `Unwrap` reaches the underlying cause. |
+
+### Structured errors
+
+Every error is also an `*atlas.Error`, carrying a stable numeric `Code` plus whatever context the failing call knew about: which collection, which document, which file, which filter field. Reach it with `errors.As` when matching a sentinel isn't enough:
+
+```go
+var atlasErr *atlas.Error
+if errors.As(err, &atlasErr) {
+	atlasErr.Code()       // atlas.CodeDocumentNotFound
+	atlasErr.Collection() // "users"
+}
+```
+
+The other getters — `Path`, `DocumentID`, `Field`, `Value`, `Message`, `Unwrap` — return a zero value when the failure had nothing to put there. `Error()` prints the code and every populated field: `[Atlas 300] document not found: collection="users" id="6710f2a3b4c5d6e7f8091023"`.
+
+Codes are stable and safe to persist or compare as plain integers: a number is never reused or reassigned once a name has it, and `Code.String()` gives the matching mnemonic (`"document_not_found"`). Matching by code is also what makes `errors.Is` work — every error is built fresh with its own context, and compares equal to the sentinel that shares its code.
 
 ## Concurrency
 

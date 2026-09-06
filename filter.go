@@ -44,7 +44,9 @@ func (op operator) satisfiedBy(order int) bool {
 // depth, used with Collection.Find. These functions are the only way to
 // construct one. A leaf comparison whose field is missing from a document,
 // or whose value the filter can't meaningfully compare against, simply
-// doesn't match — Find never errors or panics because of a Filter.
+// doesn't match — matching never errors or panics. Find does reject one kind
+// of filter up front, before scanning anything: Gt/Lt/Gte/Lte against a value
+// with no defined order (ErrInvalidFilter).
 type Filter interface {
 	matches(doc Document) bool
 }
@@ -245,6 +247,53 @@ func asFloat(v any) (float64, bool) {
 	return 0, false
 }
 
+// validateFilter rejects a filter that no document could ever satisfy for a
+// reason visible in the filter's own shape — an ordering operator against a
+// value with no defined order — so Find fails at the call instead of scanning
+// a whole collection to prove nothing matches. It is deliberately not the
+// same thing as a document simply not matching: whether a given document has
+// the field, and what type it holds, is only knowable per document, and stays
+// a silent non-match.
+func validateFilter(f Filter) error {
+	switch v := f.(type) {
+	case leafFilter:
+		if v.op != opEq && !isOrderable(v.value) {
+			return &Error{
+				code:    CodeInvalidFilter,
+				message: "comparison operator used with a value that has no defined order",
+				field:   v.field,
+				value:   v.value,
+			}
+		}
+	case andFilter:
+		for _, sub := range v.filters {
+			if err := validateFilter(sub); err != nil {
+				return err
+			}
+		}
+	case orFilter:
+		for _, sub := range v.filters {
+			if err := validateFilter(sub); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// isOrderable reports whether leafFilter.matches has an ordering to apply to
+// v — exactly the type families its comparison branches cover.
+func isOrderable(v any) bool {
+	switch v.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64,
+		string, time.Time, Date:
+		return true
+	}
+	return false
+}
+
 // FindOption configures a Find or FindFunc scan. See WithLimit and
 // WithOffset.
 type FindOption func(*findConfig)
@@ -325,7 +374,7 @@ func (cur *Cursor) Next() bool {
 			id, fields, err := encoding.Unmarshal(record.Data)
 			if err != nil {
 				cur.valid = false
-				cur.err = err
+				cur.err = wrapCollectionErr(err, cur.col.name)
 				return false
 			}
 
@@ -350,7 +399,7 @@ func (cur *Cursor) Next() bool {
 
 		records, next, err := storage.NextPage(cur.ctx, cur.col.db.f, cur.col.db.h, cur.nextPage)
 		if err != nil {
-			cur.err = wrapInternalErr(err, cur.col.name)
+			cur.err = wrapCollectionErr(err, cur.col.name)
 			return false
 		}
 		if len(records) == 0 {
@@ -365,7 +414,7 @@ func (cur *Cursor) Next() bool {
 // returns an error if Next has not yet been called, or last returned false.
 func (cur *Cursor) Document() (Document, error) {
 	if cur.closed || !cur.valid {
-		return Document{}, errNoCurrentDocument
+		return Document{}, ErrNoCurrentDocument
 	}
 	return cur.current, nil
 }
@@ -406,6 +455,9 @@ func (cur *Cursor) Collect() ([]Document, error) {
 // cursor over them. Options bound how much of the collection the scan
 // touches — see WithLimit and WithOffset.
 func (c *Collection) Find(ctx context.Context, filter Filter, opts ...FindOption) (*Cursor, error) {
+	if err := validateFilter(filter); err != nil {
+		return nil, err
+	}
 	return c.FindFunc(ctx, filter.matches, opts...)
 }
 
@@ -425,7 +477,7 @@ func (c *Collection) FindFunc(ctx context.Context, pred func(Document) bool, opt
 
 	_, slot, err := storage.FindCollectionSlot(ctx, c.db.f, c.db.h, c.name)
 	if err != nil {
-		return nil, wrapInternalErr(err, c.name)
+		return nil, wrapCollectionErr(err, c.name)
 	}
 	return &Cursor{
 		col:      c,
