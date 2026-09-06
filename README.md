@@ -2,6 +2,8 @@
 
 Atlas is an embedded document database for Go. It stores JSON-like documents in collections inside a single `.db` file — no server process, no separate driver, no runtime dependency beyond `golang.org/x/sys` (used for cross-platform file locking). Analogous to SQLite, but for documents instead of rows.
 
+**Status: pre-1.0.** The public API and the `.db` file format may still change between releases; a `.db` file written by one v0.x release isn't guaranteed to open with the next.
+
 ## Features
 
 - Single-file storage, opened directly by the Go program that uses it.
@@ -319,3 +321,7 @@ The public API in this package sits on top of three internal packages that own t
 | [`internal/file`](internal/file/README.md) | Cross-platform file locking, and the naming/permission conventions for the `.db` file and its journal. |
 
 See the linked READMEs for the exact byte-level format.
+
+## License
+
+[MIT](LICENSE)
